@@ -5508,6 +5508,8 @@ function updateDashboardStats() {
 // --- Monthly Subscription Mode ---
 function startMonthlySubscription() {
     const fee = parseInt(document.getElementById('monthly-fee-input').value) || 0;
+    const platformFeeInput = document.getElementById('platform-fee-input');
+    const platformFee = platformFeeInput ? (parseInt(platformFeeInput.value) || 0) : 0;
     const comm = parseInt(document.getElementById('center-commission-input').value) || 0;
     const nameInput = document.getElementById('monthly-name-input');
     const cycleName = nameInput ? nameInput.value.trim() : '';
@@ -5516,7 +5518,11 @@ function startMonthlySubscription() {
     const subscriptionType = typeSelect ? typeSelect.value : 'lesson';
 
     if ((subscriptionType === 'lesson' || subscriptionType === 'both') && fee <= 0) {
-        return showNotification('يرجى تحديد قيمة الاشتراك للدورة الجديدة', 'error');
+        return showNotification('يرجى تحديد قيمة اشتراك الدرس للدورة الجديدة', 'error');
+    }
+
+    if ((subscriptionType === 'platform' || subscriptionType === 'both') && platformFee <= 0) {
+        return showNotification('يرجى تحديد قيمة اشتراك المنصة للدورة الجديدة', 'error');
     }
 
     // --- Platform course requirement ---
@@ -5536,6 +5542,7 @@ function startMonthlySubscription() {
 
     db.settings.isMonthlyActive = true;
     db.settings.monthlyFee = fee;
+    db.settings.platformFee = platformFee;
     db.settings.centerCommissionPercent = comm;
     db.settings.monthlyCycleName = cycleName || `اشتراك ${new Date().toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' })}`;
     // Set a new unique cycle ID for this subscription period
@@ -5549,8 +5556,11 @@ function startMonthlySubscription() {
 
     db.save();
 
-    let msg = `تم تفعيل وضع الاشتراك الشهري بقيمة ${fee} ج.م 🚀`;
-    if (platformCourse) msg += ` | كورس المنصة: ${platformCourse.courseTitle}`;
+    let msg = `تم تفعيل وضع الاشتراك الشهري`;
+    if (fee > 0) msg += ` | درس: ${fee} ج.م`;
+    if (platformFee > 0) msg += ` | منصة: ${platformFee} ج.م`;
+    if (platformCourse) msg += ` | كورس: ${platformCourse.courseTitle}`;
+    msg += ' 🚀';
     showNotification(msg);
     renderFinances();
     renderMonthlySubscriptionTables();
@@ -5761,7 +5771,18 @@ function renderMonthlySubscriptionTables() {
             monthlyNameInput.disabled = true;
         }
 
-        let badgeText = `وضع الاشتراك نشط (${db.settings.monthlyFee} ج.م) | نسبة السنتر: ${db.settings.centerCommissionPercent}%`;
+        // Show/lock platform fee input
+        const platformFeeInput = document.getElementById('platform-fee-input');
+        const platformFeeWrapper = document.getElementById('platform-fee-input-wrapper');
+        if (platformFeeInput) {
+            platformFeeInput.value = db.settings.platformFee || 0;
+            platformFeeInput.disabled = true;
+        }
+
+        let badgeText = `وضع الاشتراك نشط`;
+        if (db.settings.monthlyFee) badgeText += ` | درس: ${db.settings.monthlyFee} ج.م`;
+        if (db.settings.platformFee) badgeText += ` | منصة: ${db.settings.platformFee} ج.م`;
+        badgeText += ` | سنتر: ${db.settings.centerCommissionPercent}%`;
         const typeLabels = { lesson: 'اشتراك الدرس', platform: 'اشتراك المنصة', both: 'اشتراك الدرس + المنصة' };
         if (db.settings.cycleSubscriptionType) {
             badgeText += ` | ${typeLabels[db.settings.cycleSubscriptionType] || ''}`;
@@ -5793,6 +5814,12 @@ function renderMonthlySubscriptionTables() {
         if (centerCommInput) centerCommInput.value = '';
         if (monthlyNameInput) monthlyNameInput.disabled = false;
 
+        const platformFeeInput = document.getElementById('platform-fee-input');
+        if (platformFeeInput) {
+            platformFeeInput.value = '';
+            platformFeeInput.disabled = false;
+        }
+
         const typeSelect = document.getElementById('cycle-subscription-type');
         const courseSelect = document.getElementById('cycle-platform-course');
         if (typeSelect) typeSelect.disabled = false;
@@ -5814,11 +5841,15 @@ function renderMonthlySubscriptionTables() {
             gradeStudentIds.includes(p.studentId)
         ).reduce((sum, p) => sum + p.amount, 0);
 
-        badge.innerText = `وضع الاشتراك نشط (المحصل: ${collected} ج.م)`;
+        badge.innerText = `وضع الاشتراك نشط (درس محصل: ${collected} ج.م)`;
         document.getElementById('monthly-fee-input').value = db.settings.monthlyFee;
         document.getElementById('monthly-fee-input').disabled = true;
+        const pfInput = document.getElementById('platform-fee-input');
+        if (pfInput) { pfInput.value = db.settings.platformFee || 0; pfInput.disabled = true; }
     } else {
         document.getElementById('monthly-fee-input').disabled = false;
+        const pfInput = document.getElementById('platform-fee-input');
+        if (pfInput) pfInput.disabled = false;
     }
 
     const paidList = [];
@@ -5896,9 +5927,10 @@ function renderFinances() {
     const lessonIncome = monthlyCyclePayments
         .filter(p => p.category === 'اشتراك شهري')
         .reduce((sum, p) => sum + p.amount, 0);
+    // Platform income = payments with category 'اشتراك المنصة' OR platformAmount stored on payment
     const platformIncome = monthlyCyclePayments
-        .filter(p => p.category === 'اشتراك المنصة')
-        .reduce((sum, p) => sum + p.amount, 0);
+        .filter(p => p.category === 'اشتراك المنصة' || p.platformAmount > 0)
+        .reduce((sum, p) => sum + (p.platformAmount || p.amount), 0);
     const lessonEl = document.getElementById('finance-income-lesson');
     const platformEl = document.getElementById('finance-income-platform');
     if (lessonEl) lessonEl.innerText = `${lessonIncome} ج.م`;

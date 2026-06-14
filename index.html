@@ -1158,17 +1158,27 @@
                 </div>
             </div>
 
-            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+            <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));">
                 <div class="card">
                     <div class="card-title">المقبوضات الشهرية <i class="fas fa-calendar-alt"
                             style="color:var(--accent)"></i>
                     </div>
                     <div class="card-value" id="finance-income-monthly" style="color: var(--accent);">0 ج.م</div>
-                    <small style="display:block; margin-top:0.4rem; color:var(--text-muted);">
-                        اشتراك الدرس: <strong id="finance-income-lesson">0 ج.م</strong>
-                        &nbsp;|&nbsp;
-                        اشتراك المنصة: <strong id="finance-income-platform">0 ج.م</strong>
-                    </small>
+                    <small style="display:block; margin-top:0.4rem; color:var(--text-muted);">إجمالي الدورة الحالية</small>
+                </div>
+                <div class="card" style="border-right: 4px solid #2563eb;">
+                    <div class="card-title">اشتراكات الدروس <i class="fas fa-chalkboard-teacher"
+                            style="color:#2563eb"></i>
+                    </div>
+                    <div class="card-value" id="finance-income-lesson" style="color: #2563eb;">0 ج.م</div>
+                    <small style="display:block; margin-top:0.4rem; color:var(--text-muted);">مجموع اشتراكات الدرس</small>
+                </div>
+                <div class="card" style="border-right: 4px solid #7c3aed;">
+                    <div class="card-title">اشتراكات المنصة <i class="fas fa-laptop-code"
+                            style="color:#7c3aed"></i>
+                    </div>
+                    <div class="card-value" id="finance-income-platform" style="color: #7c3aed;">0 ج.م</div>
+                    <small style="display:block; margin-top:0.4rem; color:var(--text-muted);">دفع المنصة + الاثنين معاً</small>
                 </div>
                 <div class="card">
                     <div class="card-title">المقبوضات السنوية <i class="fas fa-chart-line"
@@ -1203,10 +1213,14 @@
                             placeholder="مثلاً: شهر مارس 2026">
                     </div>
                     <div style="flex: 1; min-width: 150px;">
-                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 700;">قيمة الاشتراك
-                            (ج.م):</label>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 700;">قيمة اشتراك الدرس (ج.م):</label>
                         <input type="number" id="monthly-fee-input" class="form-input" style="margin-bottom: 0;"
                             placeholder="مثلاً: 100">
+                    </div>
+                    <div id="platform-fee-input-wrapper" style="flex: 1; min-width: 150px; display:none;">
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 700; color:#7c3aed;">قيمة اشتراك المنصة (ج.م):</label>
+                        <input type="number" id="platform-fee-input" class="form-input" style="margin-bottom: 0; border-color:#7c3aed;"
+                            placeholder="مثلاً: 50">
                     </div>
                     <div style="flex: 1; min-width: 150px;">
                         <label style="display: block; margin-bottom: 0.5rem; font-weight: 700;">نسبة السنتر (%):</label>

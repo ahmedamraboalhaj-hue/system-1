@@ -113,12 +113,18 @@ async function refreshPlatformCourses() {
 function onCycleSubscriptionTypeChange() {
     const typeSelect = document.getElementById('cycle-subscription-type');
     const courseWrapper = document.getElementById('cycle-platform-course-wrapper');
+    const platformFeeWrapper = document.getElementById('platform-fee-input-wrapper');
     const feeInput = document.getElementById('monthly-fee-input');
     if (!typeSelect || !courseWrapper) return;
 
     const type = typeSelect.value;
     const needsCourse = (type === 'platform' || type === 'both');
     courseWrapper.style.display = needsCourse ? 'block' : 'none';
+
+    // إظهار/إخفاء حقل رسوم المنصة
+    if (platformFeeWrapper) {
+        platformFeeWrapper.style.display = needsCourse ? 'block' : 'none';
+    }
 
     if (needsCourse) {
         populateCycleCourseSelect();
@@ -138,16 +144,35 @@ function populateCycleCourseSelect() {
     const select = document.getElementById('cycle-platform-course');
     if (!select) return;
 
-    const courses = getAvailablePlatformCourses();
+    // ─── لوغات تشخيص ────────────────────────────────────────
+    const allCourses = db.platformCourses || [];
+    const grade = mapOfflineGradeToPlatformGrade(currentGrade);
+    console.log('[COURSES] إجمالي الكورسات في قاعدة البيانات المحلية:', allCourses.length);
+    console.log('[COURSES] الصف الحالي (systemCode):', currentGrade, '| platformCode:', grade);
+    console.log('[COURSES] عينة من الكورسات المحفوظة:', allCourses.slice(0, 3));
+
+    // أولاً: جرب مع فلترة الصف
+    let courses = getAvailablePlatformCourses();
+    console.log('[COURSES] عدد الكورسات بعد فلترة الصف:', courses.length);
+
+    // Fallback: إذا لم تُوجد كورسات بالصف — اعرض جميع الكورسات
+    if (!courses.length && allCourses.length > 0) {
+        console.warn('[COURSES] لا توجد كورسات للصف المحدد — سيتم عرض جميع الكورسات المحفوظة (fallback)');
+        courses = allCourses;
+    }
+
+    console.log('[COURSES] عدد العناصر المُمررة لقائمة الاختيار:', courses.length);
+    // ─────────────────────────────────────────────────────────
+
     const currentValue = select.value;
 
     if (!courses.length) {
-        select.innerHTML = `<option value="">-- لا توجد كورسات محفوظة، اضغط "تحديث الكورسات" --</option>`;
+        select.innerHTML = `<option value="">-- لا توجد كورسات محفوظة (${allCourses.length} في DB)، اضغط "تحديث الكورسات" --</option>`;
         return;
     }
 
     select.innerHTML = `<option value="">-- اختر الكورس --</option>` +
-        courses.map(c => `<option value="${c.courseId}">${c.courseTitle} (${c.price} ج.م)</option>`).join('');
+        courses.map(c => `<option value="${c.courseId}">${c.courseTitle}${c.price ? ' (' + c.price + ' ج.م)' : ''}</option>`).join('');
 
     if (courses.some(c => String(c.courseId) === String(currentValue))) {
         select.value = currentValue;
