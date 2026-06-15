@@ -47,16 +47,33 @@ function getAvailablePlatformCourses(searchTerm = '') {
 // ============================================
 
 /**
- * يجلب جميع الكورسات الموجودة على المنصة (Collection: platform_courses) بالكامل
- * بدون أي فلترة - سواء عليها طلاب أو لا، جديدة أو قديمة، مفتوحة أو مغلقة.
- * يحفظها محلياً في platformCourses لاستخدامها بدون إنترنت بعد ذلك.
- * زر "تحديث الكورسات".
+ * يجلب جميع الكورسات من Firebase ويحفظها محلياً.
+ *
+ * ── استراتيجية الجلب (بالترتيب) ──────────────────────────────────
+ *  1. يجرب Collection  'platform_courses'  (المسار الأصلي).
+ *  2. إذا رجعت صفر نتائج يجرب 'courses' (اسم بديل شائع).
+ *  3. إذا رجعت صفر نتائج ينتقل لـ Fallback:
+ *     يبني الكورسات الفريدة من course_codes المحفوظة محلياً
+ *     (التي تحتوي courseId + courseTitle + grade + price بالفعل).
+ *
+ * ── لماذا course_codes كـ Fallback؟ ──────────────────────────────
+ *  • course_codes تُجلب بنجاح وتحتوي بيانات كل كورس (id, title, grade, price).
+ *  • نستخرج الكورسات الفريدة منها مباشرة بدلاً من ترك القائمة فارغة.
  */
 async function refreshPlatformCourses() {
     const btn = document.getElementById('btn-refresh-platform-courses');
     try {
         const online = await isReallyOnline();
         if (!online) {
+            // offline: حاول البناء من course_codes المحلية
+            const built = _buildCoursesFromCourseCodes();
+            if (built.length) {
+                db.platformCourses = built;
+                await StorageEngine.save('platformCourses', built);
+                showNotification(`لا يوجد إنترنت — تم بناء ${built.length} كورس من الأكواد المحلية.`, 'warning');
+                if (typeof populateCycleCourseSelect === 'function') populateCycleCourseSelect();
+                return true;
+            }
             showNotification('لا يوجد اتصال بالإنترنت. سيتم استخدام آخر نسخة محفوظة من الكورسات.', 'warning');
             return false;
         }
@@ -66,30 +83,98 @@ async function refreshPlatformCourses() {
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري تحديث الكورسات...';
         }
 
-        // قراءة كامل الـ Collection بدون أي شروط (.where) - كل الكورسات بكل حالاتها
-        const snapshot = await window.db.collection('platform_courses').get();
-        const courses = [];
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            courses.push({
-                id: doc.id,
-                courseId: data.courseId || doc.id,
-                courseTitle: data.courseTitle || data.title || 'كورس بدون اسم',
-                grade: data.grade || '',
-                price: Number(data.price) || 0,
-                status: data.status || 'active'
-            });
-        });
+        let courses = [];
+        let sourceUsed = '';
+
+        // ─── المحاولة 1: platform_courses ───────────────────────────
+        try {
+            const snap1 = await window.db.collection('platform_courses').get();
+            if (!snap1.empty) {
+                snap1.forEach(doc => {
+                    const d = doc.data();
+                    courses.push({
+                        id: doc.id,
+                        courseId: d.courseId || d.id || doc.id,
+                        courseTitle: d.courseTitle || d.title || d.name || 'كورس بدون اسم',
+                        grade: d.grade || d.gradeId || '',
+                        price: Number(d.price || d.unitPrice || d.cost || 0),
+                        status: d.status || 'active'
+                    });
+                });
+                sourceUsed = 'platform_courses';
+                console.log('[COURSES] platform_courses ✅', courses.length);
+            } else {
+                console.warn('[COURSES] platform_courses فارغة — جاري تجربة مسار بديل...');
+            }
+        } catch (e) {
+            console.warn('[COURSES] platform_courses خطأ:', e.message);
+        }
+
+        // ─── المحاولة 2: courses ─────────────────────────────────────
+        if (!courses.length) {
+            try {
+                const snap2 = await window.db.collection('courses').get();
+                if (!snap2.empty) {
+                    snap2.forEach(doc => {
+                        const d = doc.data();
+                        courses.push({
+                            id: doc.id,
+                            courseId: d.courseId || d.id || doc.id,
+                            courseTitle: d.courseTitle || d.title || d.name || 'كورس بدون اسم',
+                            grade: d.grade || d.gradeId || '',
+                            price: Number(d.price || d.unitPrice || d.cost || 0),
+                            status: d.status || 'active'
+                        });
+                    });
+                    sourceUsed = 'courses';
+                    console.log('[COURSES] courses ✅', courses.length);
+                } else {
+                    console.warn('[COURSES] courses فارغة أيضاً.');
+                }
+            } catch (e) {
+                console.warn('[COURSES] courses خطأ:', e.message);
+            }
+        }
+
+        // ─── Fallback: بناء من course_codes ──────────────────────────
+        if (!courses.length) {
+            console.warn('[COURSES] لا توجد كورسات من Firebase — سيتم البناء من course_codes.');
+            // تحديث course_codes من Firebase أولاً
+            try {
+                const codesSnap = await window.db.collection('course_codes').get();
+                if (!codesSnap.empty) {
+                    const freshCodes = [];
+                    codesSnap.forEach(doc => freshCodes.push({ id: doc.id, ...doc.data() }));
+                    db.courseCodes = freshCodes;
+                    await StorageEngine.save('courseCodes', freshCodes);
+                    console.log('[COURSES] course_codes محدّثة:', freshCodes.length);
+                }
+            } catch (e) {
+                console.warn('[COURSES] تعذّر تحديث course_codes:', e.message);
+            }
+            courses = _buildCoursesFromCourseCodes();
+            sourceUsed = 'course_codes (fallback)';
+            console.log('[COURSES] courses مبنية من course_codes:', courses.length);
+        }
 
         db.platformCourses = courses;
         await StorageEngine.save('platformCourses', courses);
 
-        showNotification(`✅ تم تحديث وحفظ ${courses.length} كورس محلياً (جميع الكورسات بكل حالاتها). يمكنك الآن البيع بدون إنترنت.`, 'success');
+        if (courses.length) {
+            showNotification(
+                `✅ تم تحديث ${courses.length} كورس من (${sourceUsed}). يمكنك الاختيار الآن.`,
+                'success'
+            );
+        } else {
+            showNotification(
+                '⚠️ لا توجد كورسات في قاعدة البيانات. تأكد من إضافة الكورسات على المنصة.',
+                'warning'
+            );
+        }
 
-        // تحديث القوائم المنسدلة المرتبطة بالكورسات إن كانت معروضة
         if (typeof populateCycleCourseSelect === 'function') populateCycleCourseSelect();
-
         return true;
+
     } catch (err) {
         console.error('refreshPlatformCourses failed', err);
         showNotification('حدث خطأ أثناء تحديث الكورسات: ' + err.message, 'error');
@@ -100,6 +185,37 @@ async function refreshPlatformCourses() {
             btn.innerHTML = '<i class="fas fa-cloud-download-alt"></i> تحديث الكورسات';
         }
     }
+}
+
+/**
+ * يبني قائمة كورسات فريدة من db.courseCodes المحفوظة محلياً.
+ * السعر = أول قيمة price/unitPrice/discountedPrice في أكواد نفس الكورس.
+ */
+function _buildCoursesFromCourseCodes() {
+    const codes = db.courseCodes || [];
+    if (!codes.length) return [];
+    const map = new Map();
+    codes.forEach(c => {
+        const cid = String(c.courseId || '').trim();
+        if (!cid) return;
+        if (!map.has(cid)) {
+            map.set(cid, {
+                id: cid,
+                courseId: cid,
+                courseTitle: c.courseTitle || c.title || 'كورس بدون اسم',
+                grade: String(c.grade || ''),
+                price: Number(c.price || c.unitPrice || c.discountedPrice || 0),
+                status: 'active'
+            });
+        } else {
+            const existing = map.get(cid);
+            if (!existing.courseTitle || existing.courseTitle === 'كورس بدون اسم')
+                existing.courseTitle = c.courseTitle || c.title || existing.courseTitle;
+            if (!existing.grade) existing.grade = String(c.grade || '');
+            if (!existing.price) existing.price = Number(c.price || c.unitPrice || c.discountedPrice || 0);
+        }
+    });
+    return Array.from(map.values());
 }
 
 // ============================================
@@ -113,18 +229,12 @@ async function refreshPlatformCourses() {
 function onCycleSubscriptionTypeChange() {
     const typeSelect = document.getElementById('cycle-subscription-type');
     const courseWrapper = document.getElementById('cycle-platform-course-wrapper');
-    const platformFeeWrapper = document.getElementById('platform-fee-input-wrapper');
     const feeInput = document.getElementById('monthly-fee-input');
     if (!typeSelect || !courseWrapper) return;
 
     const type = typeSelect.value;
     const needsCourse = (type === 'platform' || type === 'both');
     courseWrapper.style.display = needsCourse ? 'block' : 'none';
-
-    // إظهار/إخفاء حقل رسوم المنصة
-    if (platformFeeWrapper) {
-        platformFeeWrapper.style.display = needsCourse ? 'block' : 'none';
-    }
 
     if (needsCourse) {
         populateCycleCourseSelect();
@@ -140,42 +250,76 @@ function onCycleSubscriptionTypeChange() {
  * يملأ القائمة المنسدلة لاختيار كورس المنصة في شاشة "بدء الاشتراك"
  * من الكورسات المحفوظة محلياً (db.platformCourses) للصف الحالي.
  */
+/**
+ * يملأ قائمة الكورسات في شاشة "بدء الاشتراك".
+ * — يعرض جميع الكورسات بدون فلترة الصف.
+ * — إذا كانت القائمة فارغة يحاول البناء من course_codes أو الجلب من Firebase.
+ * — السعر يُعرض تلقائياً من بيانات الكورس (data-price attribute).
+ */
 function populateCycleCourseSelect() {
     const select = document.getElementById('cycle-platform-course');
     if (!select) return;
 
-    // ─── لوغات تشخيص ────────────────────────────────────────
-    const allCourses = db.platformCourses || [];
-    const grade = mapOfflineGradeToPlatformGrade(currentGrade);
-    console.log('[COURSES] إجمالي الكورسات في قاعدة البيانات المحلية:', allCourses.length);
-    console.log('[COURSES] الصف الحالي (systemCode):', currentGrade, '| platformCode:', grade);
-    console.log('[COURSES] عينة من الكورسات المحفوظة:', allCourses.slice(0, 3));
+    // اعرض جميع الكورسات بدون فلترة صف
+    let courses = db.platformCourses || [];
 
-    // أولاً: جرب مع فلترة الصف
-    let courses = getAvailablePlatformCourses();
-    console.log('[COURSES] عدد الكورسات بعد فلترة الصف:', courses.length);
-
-    // Fallback: إذا لم تُوجد كورسات بالصف — اعرض جميع الكورسات
-    if (!courses.length && allCourses.length > 0) {
-        console.warn('[COURSES] لا توجد كورسات للصف المحدد — سيتم عرض جميع الكورسات المحفوظة (fallback)');
-        courses = allCourses;
+    // إذا كانت فارغة — ابنِها من course_codes المحلية
+    if (!courses.length && (db.courseCodes || []).length) {
+        courses = _buildCoursesFromCourseCodes();
+        if (courses.length) {
+            db.platformCourses = courses;
+            StorageEngine.save('platformCourses', courses);
+        }
     }
 
-    console.log('[COURSES] عدد العناصر المُمررة لقائمة الاختيار:', courses.length);
-    // ─────────────────────────────────────────────────────────
+    console.log('[COURSES] populateCycleCourseSelect — كورسات:', courses.length,
+        ' | أكواد:', (db.courseCodes || []).length);
 
     const currentValue = select.value;
 
     if (!courses.length) {
-        select.innerHTML = `<option value="">-- لا توجد كورسات محفوظة (${allCourses.length} في DB)، اضغط "تحديث الكورسات" --</option>`;
+        select.innerHTML = `<option value="">-- لا توجد كورسات، اضغط "تحديث الكورسات" أولاً --</option>`;
+        // جلب تلقائي إذا كان الإنترنت متاحاً
+        if (navigator.onLine && typeof refreshPlatformCourses === 'function') {
+            refreshPlatformCourses().then(() => populateCycleCourseSelect());
+        }
         return;
     }
 
     select.innerHTML = `<option value="">-- اختر الكورس --</option>` +
-        courses.map(c => `<option value="${c.courseId}">${c.courseTitle}${c.price ? ' (' + c.price + ' ج.م)' : ''}</option>`).join('');
+        courses.map(c => {
+            const priceLabel = c.price ? ` — ${c.price} ج.م` : '';
+            return `<option value="${c.courseId}" data-price="${c.price || 0}">${c.courseTitle}${priceLabel}</option>`;
+        }).join('');
 
     if (courses.some(c => String(c.courseId) === String(currentValue))) {
         select.value = currentValue;
+    }
+}
+
+/**
+ * تُستدعى عند اختيار كورس من قائمة "كورس المنصة المطلوب".
+ * تقرأ سعر الكورس من data-price attribute وتعرضه تلقائياً.
+ * تحدّث أيضاً الحقل المخفي platform-fee-input بالقيمة الصحيحة.
+ */
+function onPlatformCourseSelected(selectEl) {
+    const selectedOption = selectEl.options[selectEl.selectedIndex];
+    const price = Number(selectedOption ? selectedOption.getAttribute('data-price') || 0 : 0);
+    const courseTitle = selectedOption ? selectedOption.text : '';
+
+    // تحديث العرض التلقائي للسعر
+    const priceDisplay = document.getElementById('platform-fee-value');
+    const hiddenInput = document.getElementById('platform-fee-input');
+
+    if (selectEl.value && price > 0) {
+        if (priceDisplay) priceDisplay.textContent = `${price} ج.م`;
+        if (hiddenInput) hiddenInput.value = price;
+    } else if (selectEl.value && price === 0) {
+        if (priceDisplay) priceDisplay.textContent = 'مجاني (0 ج.م)';
+        if (hiddenInput) hiddenInput.value = 0;
+    } else {
+        if (priceDisplay) priceDisplay.textContent = 'اختر كورساً أولاً';
+        if (hiddenInput) hiddenInput.value = 0;
     }
 }
 
@@ -658,26 +802,13 @@ async function syncWithPlatform() {
         return;
     }
 
-    // ─── الخطوة 1: تحديث الكورسات ───
+    // ─── الخطوة 1: تحديث الكورسات (مع fallback تلقائي) ───
     try {
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> (1/4) تحديث الكورسات...';
-        const snapshot = await window.db.collection('platform_courses').get();
-        const courses = [];
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            courses.push({
-                id: doc.id,
-                courseId: data.courseId || doc.id,
-                courseTitle: data.courseTitle || data.title || 'كورس بدون اسم',
-                grade: data.grade || '',
-                price: Number(data.price) || 0,
-                status: data.status || 'active'
-            });
-        });
-        db.platformCourses = courses;
-        await StorageEngine.save('platformCourses', courses);
-        results.push(`✅ تم تحديث ${courses.length} كورس بنجاح`);
-        if (typeof populateCycleCourseSelect === 'function') populateCycleCourseSelect();
+        // نستخدم refreshPlatformCourses التي تجرب مسارات متعددة تلقائياً
+        const didRefresh = await refreshPlatformCourses();
+        const count = (db.platformCourses || []).length;
+        results.push(`✅ تم تحديث ${count} كورس بنجاح`);
     } catch (err) {
         console.error('Step 1 failed', err);
         errors.push(`❌ تحديث الكورسات: ${err.message}`);
@@ -818,6 +949,8 @@ window.syncPlatformSubscriptionRecords = syncPlatformSubscriptionRecords;
 window.updatePendingSyncBadge = updatePendingSyncBadge;
 window.onCycleSubscriptionTypeChange = onCycleSubscriptionTypeChange;
 window.populateCycleCourseSelect = populateCycleCourseSelect;
+window.onPlatformCourseSelected   = onPlatformCourseSelected;
+window._buildCoursesFromCourseCodes = _buildCoursesFromCourseCodes;
 window.showReceivedPlatformCourses = showReceivedPlatformCourses;
 window.getAvailablePlatformCourses = getAvailablePlatformCourses;
 window.syncWithPlatform = syncWithPlatform;

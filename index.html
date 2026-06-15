@@ -1218,9 +1218,12 @@
                             placeholder="مثلاً: 100">
                     </div>
                     <div id="platform-fee-input-wrapper" style="flex: 1; min-width: 150px; display:none;">
-                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 700; color:#7c3aed;">قيمة اشتراك المنصة (ج.م):</label>
-                        <input type="number" id="platform-fee-input" class="form-input" style="margin-bottom: 0; border-color:#7c3aed;"
-                            placeholder="مثلاً: 50">
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 700; color:#7c3aed;">سعر اشتراك المنصة:</label>
+                        <div id="platform-fee-display" style="padding: 0.6rem 1rem; background: #f5f3ff; border: 2px solid #7c3aed; border-radius: 8px; font-weight: 700; color: #7c3aed; min-height: 42px; display:flex; align-items:center; gap:0.5rem;">
+                            <i class="fas fa-tag"></i>
+                            <span id="platform-fee-value">اختر كورساً أولاً</span>
+                        </div>
+                        <input type="hidden" id="platform-fee-input" value="0">
                     </div>
                     <div style="flex: 1; min-width: 150px;">
                         <label style="display: block; margin-bottom: 0.5rem; font-weight: 700;">نسبة السنتر (%):</label>
@@ -1238,7 +1241,8 @@
                     </div>
                     <div id="cycle-platform-course-wrapper" style="flex: 1; min-width: 200px; display:none;">
                         <label style="display: block; margin-bottom: 0.5rem; font-weight: 700;">كورس المنصة المطلوب:</label>
-                        <select id="cycle-platform-course" class="form-input" style="margin-bottom: 0;">
+                        <select id="cycle-platform-course" class="form-input" style="margin-bottom: 0;"
+                            onchange="onPlatformCourseSelected(this)">
                             <option value="">-- اختر الكورس --</option>
                         </select>
                     </div>

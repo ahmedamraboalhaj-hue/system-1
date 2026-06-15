@@ -5508,8 +5508,6 @@ function updateDashboardStats() {
 // --- Monthly Subscription Mode ---
 function startMonthlySubscription() {
     const fee = parseInt(document.getElementById('monthly-fee-input').value) || 0;
-    const platformFeeInput = document.getElementById('platform-fee-input');
-    const platformFee = platformFeeInput ? (parseInt(platformFeeInput.value) || 0) : 0;
     const comm = parseInt(document.getElementById('center-commission-input').value) || 0;
     const nameInput = document.getElementById('monthly-name-input');
     const cycleName = nameInput ? nameInput.value.trim() : '';
@@ -5521,10 +5519,6 @@ function startMonthlySubscription() {
         return showNotification('يرجى تحديد قيمة اشتراك الدرس للدورة الجديدة', 'error');
     }
 
-    if ((subscriptionType === 'platform' || subscriptionType === 'both') && platformFee <= 0) {
-        return showNotification('يرجى تحديد قيمة اشتراك المنصة للدورة الجديدة', 'error');
-    }
-
     // --- Platform course requirement ---
     let platformCourse = null;
     if (subscriptionType === 'platform' || subscriptionType === 'both') {
@@ -5533,12 +5527,20 @@ function startMonthlySubscription() {
         if (!courseId) {
             return showNotification('يرجى اختيار كورس المنصة المطلوب لهذه الدورة', 'error');
         }
+        // السعر يُقرأ من بيانات الكورس المحفوظة — بدون إدخال يدوي
         const course = (db.platformCourses || []).find(c => String(c.courseId) === String(courseId));
         if (!course) {
             return showNotification('الكورس المحدد غير موجود، يرجى تحديث الكورسات', 'error');
         }
-        platformCourse = { courseId: course.courseId, courseTitle: course.courseTitle, price: Number(course.price) || 0 };
+        // نحاول قراءة السعر من data-price أولاً (أحدث قيمة) ثم من db
+        const selectedOption = courseSelect.options[courseSelect.selectedIndex];
+        const priceFromOption = selectedOption ? Number(selectedOption.getAttribute('data-price') || 0) : 0;
+        const resolvedPrice = priceFromOption || Number(course.price) || 0;
+        platformCourse = { courseId: course.courseId, courseTitle: course.courseTitle, price: resolvedPrice };
     }
+
+    // platformFee = سعر الكورس المختار (يُحدَّد تلقائياً)
+    const platformFee = platformCourse ? platformCourse.price : 0;
 
     db.settings.isMonthlyActive = true;
     db.settings.monthlyFee = fee;
@@ -5771,13 +5773,13 @@ function renderMonthlySubscriptionTables() {
             monthlyNameInput.disabled = true;
         }
 
-        // Show/lock platform fee input
-        const platformFeeInput = document.getElementById('platform-fee-input');
+        // عرض سعر المنصة تلقائياً (حقل مخفي + عرض للقراءة فقط)
         const platformFeeWrapper = document.getElementById('platform-fee-input-wrapper');
-        if (platformFeeInput) {
-            platformFeeInput.value = db.settings.platformFee || 0;
-            platformFeeInput.disabled = true;
-        }
+        const platformFeeHidden = document.getElementById('platform-fee-input');
+        const platformFeeValueEl = document.getElementById('platform-fee-value');
+        const savedPlatformFee = db.settings.platformFee || 0;
+        if (platformFeeHidden) platformFeeHidden.value = savedPlatformFee;
+        if (platformFeeValueEl) platformFeeValueEl.textContent = savedPlatformFee > 0 ? `${savedPlatformFee} ج.م` : 'مجاني (0 ج.م)';
 
         let badgeText = `وضع الاشتراك نشط`;
         if (db.settings.monthlyFee) badgeText += ` | درس: ${db.settings.monthlyFee} ج.م`;
@@ -5814,11 +5816,10 @@ function renderMonthlySubscriptionTables() {
         if (centerCommInput) centerCommInput.value = '';
         if (monthlyNameInput) monthlyNameInput.disabled = false;
 
-        const platformFeeInput = document.getElementById('platform-fee-input');
-        if (platformFeeInput) {
-            platformFeeInput.value = '';
-            platformFeeInput.disabled = false;
-        }
+        const platformFeeHiddenReset = document.getElementById('platform-fee-input');
+        const platformFeeDisplayReset = document.getElementById('platform-fee-value');
+        if (platformFeeHiddenReset) platformFeeHiddenReset.value = '0';
+        if (platformFeeDisplayReset) platformFeeDisplayReset.textContent = 'اختر كورساً أولاً';
 
         const typeSelect = document.getElementById('cycle-subscription-type');
         const courseSelect = document.getElementById('cycle-platform-course');
@@ -5844,12 +5845,17 @@ function renderMonthlySubscriptionTables() {
         badge.innerText = `وضع الاشتراك نشط (درس محصل: ${collected} ج.م)`;
         document.getElementById('monthly-fee-input').value = db.settings.monthlyFee;
         document.getElementById('monthly-fee-input').disabled = true;
-        const pfInput = document.getElementById('platform-fee-input');
-        if (pfInput) { pfInput.value = db.settings.platformFee || 0; pfInput.disabled = true; }
+        const pfHidden2 = document.getElementById('platform-fee-input');
+        const pfDisplay2 = document.getElementById('platform-fee-value');
+        const pf2 = db.settings.platformFee || 0;
+        if (pfHidden2) pfHidden2.value = pf2;
+        if (pfDisplay2) pfDisplay2.textContent = pf2 > 0 ? `${pf2} ج.م` : 'اختر كورساً أولاً';
     } else {
         document.getElementById('monthly-fee-input').disabled = false;
-        const pfInput = document.getElementById('platform-fee-input');
-        if (pfInput) pfInput.disabled = false;
+        const pfHidden3 = document.getElementById('platform-fee-input');
+        const pfDisplay3 = document.getElementById('platform-fee-value');
+        if (pfHidden3) pfHidden3.value = '0';
+        if (pfDisplay3) pfDisplay3.textContent = 'اختر كورساً أولاً';
     }
 
     const paidList = [];
