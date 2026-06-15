@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'alamin-pwa-v4';
+const CACHE_VERSION = 'alamin-pwa-v3';
 const APP_SHELL = [
   './',
   './index.html',

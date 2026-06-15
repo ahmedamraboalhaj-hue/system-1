@@ -212,9 +212,7 @@ const db = {
                 monthlyCycleName: '',
                 activeCycle: null,
                 treasurySessionResetTime: {},
-                platformSubscriptionFee: 100,
-                cycleSubscriptionType: 'lesson',
-                activePlatformCourse: null
+                platformSubscriptionFee: 100
             };
         }
         return this._settings[key];
@@ -4506,14 +4504,29 @@ function openSmartCard(studentId) {
                     onclick="recordQuickAction(${s.id}, 'attendance'); openSmartCard(${s.id});">
                     <i class="fas fa-user-check"></i> تسجيل حضور
                 </button>
+                <!-- أزرار دفع الاشتراك الثلاثة المستقلة -->
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                    <button class="btn btn-payment" style="height: 60px; border-radius: 12px; font-size: 1.1rem;"
-                        onclick="openSubscriptionTypeModal(${s.id})">
-                        <i class="fas fa-money-bill-wave"></i> دفع اشتراك
+                    <button class="btn btn-payment" style="height: 65px; border-radius: 12px; font-size: 0.88rem; line-height:1.3; background: #16a34a; box-shadow: 0 4px 14px -2px rgba(22,163,74,0.35);"
+                        onclick="payLessonDirect(${s.id})">
+                        <i class="fas fa-chalkboard-teacher" style="display:block;font-size:1.2rem;margin-bottom:3px;"></i>
+                        دفع اشتراك الدرس
                     </button>
-                    <button class="btn btn-payment" style="height: 60px; border-radius: 12px; font-size: 1.1rem; background: var(--vibrant-orange);"
+                    <button class="btn btn-payment" style="height: 65px; border-radius: 12px; font-size: 0.88rem; line-height:1.3; background: #2563eb; box-shadow: 0 4px 14px -2px rgba(37,99,235,0.35);"
+                        onclick="payPlatformDirect(${s.id})">
+                        <i class="fas fa-laptop-code" style="display:block;font-size:1.2rem;margin-bottom:3px;"></i>
+                        دفع اشتراك المنصة
+                    </button>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px;">
+                    <button class="btn btn-payment" style="height: 65px; border-radius: 12px; font-size: 0.88rem; line-height:1.3; background: linear-gradient(135deg,#7c3aed,#db2777); box-shadow: 0 4px 14px -2px rgba(124,58,237,0.35);"
+                        onclick="payBothDirect(${s.id})">
+                        <i class="fas fa-layer-group" style="display:block;font-size:1.2rem;margin-bottom:3px;"></i>
+                        دفع الاشتراكين معاً
+                    </button>
+                    <button class="btn btn-payment" style="height: 65px; border-radius: 12px; font-size: 0.88rem; line-height:1.3; background: var(--vibrant-orange);"
                         onclick="recordQuickAction(${s.id}, 'handout'); openSmartCard(${s.id});">
-                        <i class="fas fa-book"></i> دفع ملزمة
+                        <i class="fas fa-book" style="display:block;font-size:1.2rem;margin-bottom:3px;"></i>
+                        دفع ملزمة
                     </button>
                 </div>
                 
@@ -5507,44 +5520,14 @@ function updateDashboardStats() {
 
 // --- Monthly Subscription Mode ---
 function startMonthlySubscription() {
-    const fee = parseInt(document.getElementById('monthly-fee-input').value) || 0;
+    const fee = parseInt(document.getElementById('monthly-fee-input').value);
     const comm = parseInt(document.getElementById('center-commission-input').value) || 0;
     const nameInput = document.getElementById('monthly-name-input');
     const cycleName = nameInput ? nameInput.value.trim() : '';
-
-    const typeSelect = document.getElementById('cycle-subscription-type');
-    const subscriptionType = typeSelect ? typeSelect.value : 'lesson';
-
-    if ((subscriptionType === 'lesson' || subscriptionType === 'both') && fee <= 0) {
-        return showNotification('يرجى تحديد قيمة اشتراك الدرس للدورة الجديدة', 'error');
-    }
-
-    // --- Platform course requirement ---
-    let platformCourse = null;
-    if (subscriptionType === 'platform' || subscriptionType === 'both') {
-        const courseSelect = document.getElementById('cycle-platform-course');
-        const courseId = courseSelect ? courseSelect.value : '';
-        if (!courseId) {
-            return showNotification('يرجى اختيار كورس المنصة المطلوب لهذه الدورة', 'error');
-        }
-        // السعر يُقرأ من بيانات الكورس المحفوظة — بدون إدخال يدوي
-        const course = (db.platformCourses || []).find(c => String(c.courseId) === String(courseId));
-        if (!course) {
-            return showNotification('الكورس المحدد غير موجود، يرجى تحديث الكورسات', 'error');
-        }
-        // نحاول قراءة السعر من data-price أولاً (أحدث قيمة) ثم من db
-        const selectedOption = courseSelect.options[courseSelect.selectedIndex];
-        const priceFromOption = selectedOption ? Number(selectedOption.getAttribute('data-price') || 0) : 0;
-        const resolvedPrice = priceFromOption || Number(course.price) || 0;
-        platformCourse = { courseId: course.courseId, courseTitle: course.courseTitle, price: resolvedPrice };
-    }
-
-    // platformFee = سعر الكورس المختار (يُحدَّد تلقائياً)
-    const platformFee = platformCourse ? platformCourse.price : 0;
+    if (!fee || fee <= 0) return showNotification('يرجى تحديد قيمة الاشتراك للدورة الجديدة', 'error');
 
     db.settings.isMonthlyActive = true;
     db.settings.monthlyFee = fee;
-    db.settings.platformFee = platformFee;
     db.settings.centerCommissionPercent = comm;
     db.settings.monthlyCycleName = cycleName || `اشتراك ${new Date().toLocaleDateString('ar-EG', { month: 'long', year: 'numeric' })}`;
     // Set a new unique cycle ID for this subscription period
@@ -5552,18 +5535,9 @@ function startMonthlySubscription() {
 
     db.settings.monthlyCollected = 0;
 
-    // --- NEW: subscription type & linked platform course for this cycle ---
-    db.settings.cycleSubscriptionType = subscriptionType;
-    db.settings.activePlatformCourse = platformCourse; // { courseId, courseTitle, price } or null
-
     db.save();
 
-    let msg = `تم تفعيل وضع الاشتراك الشهري`;
-    if (fee > 0) msg += ` | درس: ${fee} ج.م`;
-    if (platformFee > 0) msg += ` | منصة: ${platformFee} ج.م`;
-    if (platformCourse) msg += ` | كورس: ${platformCourse.courseTitle}`;
-    msg += ' 🚀';
-    showNotification(msg);
+    showNotification(`تم تفعيل وضع الاشتراك الشهري بقيمة ${fee} ج.م 🚀`);
     renderFinances();
     renderMonthlySubscriptionTables();
     updateDashboardStats();
@@ -5601,8 +5575,6 @@ function promptEndMonthlySubscription() {
 
         db.settings.isMonthlyActive = false;
         db.settings.activeCycle = null;
-        db.settings.cycleSubscriptionType = null;
-        db.settings.activePlatformCourse = null;
         db.save();
         showNotification("تم إنهاء وأرشفة الدورة بنجاح ✅");
         renderFinances();
@@ -5772,60 +5744,11 @@ function renderMonthlySubscriptionTables() {
             monthlyNameInput.value = db.settings.monthlyCycleName || '';
             monthlyNameInput.disabled = true;
         }
-
-        // عرض سعر المنصة تلقائياً (حقل مخفي + عرض للقراءة فقط)
-        const platformFeeWrapper = document.getElementById('platform-fee-input-wrapper');
-        const platformFeeHidden = document.getElementById('platform-fee-input');
-        const platformFeeValueEl = document.getElementById('platform-fee-value');
-        const savedPlatformFee = db.settings.platformFee || 0;
-        if (platformFeeHidden) platformFeeHidden.value = savedPlatformFee;
-        if (platformFeeValueEl) platformFeeValueEl.textContent = savedPlatformFee > 0 ? `${savedPlatformFee} ج.م` : 'مجاني (0 ج.م)';
-
-        let badgeText = `وضع الاشتراك نشط`;
-        if (db.settings.monthlyFee) badgeText += ` | درس: ${db.settings.monthlyFee} ج.م`;
-        if (db.settings.platformFee) badgeText += ` | منصة: ${db.settings.platformFee} ج.م`;
-        badgeText += ` | سنتر: ${db.settings.centerCommissionPercent}%`;
-        const typeLabels = { lesson: 'اشتراك الدرس', platform: 'اشتراك المنصة', both: 'اشتراك الدرس + المنصة' };
-        if (db.settings.cycleSubscriptionType) {
-            badgeText += ` | ${typeLabels[db.settings.cycleSubscriptionType] || ''}`;
-        }
-        if (db.settings.activePlatformCourse) {
-            badgeText += ` | كورس: ${db.settings.activePlatformCourse.courseTitle}`;
-        }
-        badge.innerHTML = badgeText;
-
-        // Lock subscription type / course selects while a cycle is active
-        const typeSelect = document.getElementById('cycle-subscription-type');
-        const courseSelect = document.getElementById('cycle-platform-course');
-        const courseWrapper = document.getElementById('cycle-platform-course-wrapper');
-        if (typeSelect) {
-            typeSelect.value = db.settings.cycleSubscriptionType || 'lesson';
-            typeSelect.disabled = true;
-        }
-        if (courseWrapper) {
-            courseWrapper.style.display = (db.settings.cycleSubscriptionType === 'platform' || db.settings.cycleSubscriptionType === 'both') ? 'block' : 'none';
-        }
-        if (courseSelect) {
-            if (db.settings.activePlatformCourse) {
-                courseSelect.innerHTML = `<option value="${db.settings.activePlatformCourse.courseId}">${db.settings.activePlatformCourse.courseTitle}</option>`;
-            }
-            courseSelect.disabled = true;
-        }
+        badge.innerHTML = `وضع الاشتراك نشط (${db.settings.monthlyFee} ج.م) | نسبة السنتر: ${db.settings.centerCommissionPercent}%`;
     } else {
         if (monthlyFeeInput) monthlyFeeInput.value = '';
         if (centerCommInput) centerCommInput.value = '';
         if (monthlyNameInput) monthlyNameInput.disabled = false;
-
-        const platformFeeHiddenReset = document.getElementById('platform-fee-input');
-        const platformFeeDisplayReset = document.getElementById('platform-fee-value');
-        if (platformFeeHiddenReset) platformFeeHiddenReset.value = '0';
-        if (platformFeeDisplayReset) platformFeeDisplayReset.textContent = 'اختر كورساً أولاً';
-
-        const typeSelect = document.getElementById('cycle-subscription-type');
-        const courseSelect = document.getElementById('cycle-platform-course');
-        if (typeSelect) typeSelect.disabled = false;
-        if (courseSelect) courseSelect.disabled = false;
-        if (typeof onCycleSubscriptionTypeChange === 'function') onCycleSubscriptionTypeChange();
     }
 
     // ONLY show students from the ACTIVE group for the financial section
@@ -5842,20 +5765,11 @@ function renderMonthlySubscriptionTables() {
             gradeStudentIds.includes(p.studentId)
         ).reduce((sum, p) => sum + p.amount, 0);
 
-        badge.innerText = `وضع الاشتراك نشط (درس محصل: ${collected} ج.م)`;
+        badge.innerText = `وضع الاشتراك نشط (المحصل: ${collected} ج.م)`;
         document.getElementById('monthly-fee-input').value = db.settings.monthlyFee;
         document.getElementById('monthly-fee-input').disabled = true;
-        const pfHidden2 = document.getElementById('platform-fee-input');
-        const pfDisplay2 = document.getElementById('platform-fee-value');
-        const pf2 = db.settings.platformFee || 0;
-        if (pfHidden2) pfHidden2.value = pf2;
-        if (pfDisplay2) pfDisplay2.textContent = pf2 > 0 ? `${pf2} ج.م` : 'اختر كورساً أولاً';
     } else {
         document.getElementById('monthly-fee-input').disabled = false;
-        const pfHidden3 = document.getElementById('platform-fee-input');
-        const pfDisplay3 = document.getElementById('platform-fee-value');
-        if (pfHidden3) pfHidden3.value = '0';
-        if (pfDisplay3) pfDisplay3.textContent = 'اختر كورساً أولاً';
     }
 
     const paidList = [];
@@ -5933,10 +5847,9 @@ function renderFinances() {
     const lessonIncome = monthlyCyclePayments
         .filter(p => p.category === 'اشتراك شهري')
         .reduce((sum, p) => sum + p.amount, 0);
-    // Platform income = payments with category 'اشتراك المنصة' OR platformAmount stored on payment
     const platformIncome = monthlyCyclePayments
-        .filter(p => p.category === 'اشتراك المنصة' || p.platformAmount > 0)
-        .reduce((sum, p) => sum + (p.platformAmount || p.amount), 0);
+        .filter(p => p.category === 'اشتراك المنصة')
+        .reduce((sum, p) => sum + p.amount, 0);
     const lessonEl = document.getElementById('finance-income-lesson');
     const platformEl = document.getElementById('finance-income-platform');
     if (lessonEl) lessonEl.innerText = `${lessonIncome} ج.م`;
