@@ -240,6 +240,12 @@
                         <span>أكواد المنصة</span>
                     </a>
                 </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" id="nav-platform-activation" onclick="showSection('platform-activation', this)">
+                        <i class="fas fa-graduation-cap" style="color:#8b5cf6"></i>
+                        <span>تفعيل كورسات المنصة</span>
+                    </a>
+                </li>
                 <li class="nav-item" style="margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem;">
                     <button class="btn btn-primary" onclick="enterPortalMode()"
                         style="width: 100%; border-radius: 12px; height: 50px;">
@@ -1217,11 +1223,17 @@
                         <input type="number" id="monthly-fee-input" class="form-input" style="margin-bottom: 0;"
                             placeholder="مثلاً: 100">
                     </div>
-                    <div id="platform-fee-input-wrapper" style="flex: 1; min-width: 150px; display:none;">
-                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 700; color:#7c3aed;">سعر اشتراك المنصة:</label>
-                        <div id="platform-fee-display" style="padding: 0.6rem 1rem; background: #f5f3ff; border: 2px solid #7c3aed; border-radius: 8px; font-weight: 700; color: #7c3aed; min-height: 42px; display:flex; align-items:center; gap:0.5rem;">
-                            <i class="fas fa-tag"></i>
-                            <span id="platform-fee-value">اختر كورساً أولاً</span>
+                    <div id="platform-fee-input-wrapper" style="flex: 1; min-width: 180px; display:none; display: flex; flex-direction: column; gap: 0.5rem;">
+                        <div>
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 700; color:#7c3aed;">سعر المنصة الأصلي:</label>
+                            <div id="platform-original-fee-display" style="padding: 0.6rem 1rem; background: #f3f4f6; border: 2px solid #d1d5db; border-radius: 8px; font-weight: 700; color: #4b5563; min-height: 42px; display:flex; align-items:center; gap:0.5rem;">
+                                <i class="fas fa-tag"></i>
+                                <span id="platform-original-fee-value">اختر كورساً أولاً</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 0.3rem; font-weight: 700; color:#7c3aed;">سعر طلاب السيستم (ج.م):</label>
+                            <input type="number" id="platform-system-fee-input" class="form-input" style="margin-bottom: 0; min-height: 42px;" placeholder="مثلاً: 200">
                         </div>
                         <input type="hidden" id="platform-fee-input" value="0">
                     </div>
@@ -1976,6 +1988,81 @@
             </div>
         </section>
 
+        <section id="platform-activation-section" style="display:none;" class="fade-in">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:1rem; margin-bottom:1.5rem; flex-wrap:wrap;">
+                <div>
+                    <h2 style="font-size:1.6rem; margin-bottom:0.4rem;"><i class="fas fa-graduation-cap" style="color:#8b5cf6"></i> تفعيل كورسات المنصة</h2>
+                    <p style="color:var(--text-muted);">تفعيل الكورسات للطلاب بشكل مباشر (يدوي أو جماعي) وتلقائي المزامنة مع المنصة.</p>
+                </div>
+                <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                    <button class="btn btn-primary" onclick="syncPendingPlatformSubscriptions()" id="btn-sync-activation"
+                        style="height:48px; border-radius:12px; background:#8b5cf6; border:none; box-shadow:0 4px 14px -2px rgba(139,92,246,0.35);">
+                        <i class="fas fa-sync-alt"></i> مزامنة الاشتراكات المعلقة
+                    </button>
+                </div>
+            </div>
+
+            <div class="data-table-container" style="margin-bottom:1.5rem;">
+                <div style="display:grid; grid-template-columns:repeat(3, minmax(200px, 1fr)); gap:1rem; align-items:end;">
+                    <div class="form-group">
+                        <label style="font-weight:700;">1. اختر كورس المنصة</label>
+                        <select id="platform-activation-course" class="form-input" style="margin-bottom: 0;" onchange="renderPlatformActivationList()">
+                            <option value="">-- اختر الكورس --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-weight:700;">2. اختر الصف الدراسي</label>
+                        <select id="platform-activation-grade" class="form-input" style="margin-bottom: 0;" onchange="renderPlatformActivationList()">
+                            <option value="">-- اختر الصف --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-weight:700;">3. بحث باسم الطالب أو الكود</label>
+                        <input id="platform-activation-search" class="form-input" style="margin-bottom: 0;" oninput="renderPlatformActivationList()" placeholder="بحث باسم الطالب أو الكود...">
+                    </div>
+                </div>
+            </div>
+
+            <div class="data-table-container" id="platform-activation-table-wrapper" style="display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:10px;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="checkbox" id="platform-activation-select-all" onchange="toggleSelectAllActivation(this)" style="transform: scale(1.2); cursor: pointer;">
+                        <label for="platform-activation-select-all" style="font-weight:700; cursor:pointer; margin:0;">تحديد جميع الطلاب في هذه الصفحة</label>
+                    </div>
+                    <button class="btn btn-primary" onclick="batchActivateSelected()" style="background:#10b981; border:none; box-shadow:0 4px 12px rgba(16,185,129,0.2);">
+                        <i class="fas fa-check-double"></i> تفعيل الكورس للطلاب المحددين
+                    </button>
+                </div>
+
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;">
+                        <thead>
+                            <tr>
+                                <th style="width: 40px; text-align: center;">#</th>
+                                <th>الاسم</th>
+                                <th>الكود</th>
+                                <th>الصف الدراسي</th>
+                                <th>حالة التفعيل للكورس المختار</th>
+                                <th>إجراء</th>
+                            </tr>
+                        </thead>
+                        <tbody id="platform-activation-list"></tbody>
+                    </table>
+                </div>
+                
+                <div id="activation-pagination" style="display:flex; justify-content:center; align-items:center; gap:15px; margin-top:1.5rem;">
+                    <button class="btn" id="btn-activation-prev" onclick="changeActivationPage(-1)" style="background:var(--bg-light); border:1px solid var(--border);"><i class="fas fa-chevron-right"></i> السابق</button>
+                    <span id="activation-page-info" style="font-weight:700;">صفحة 1</span>
+                    <button class="btn" id="btn-activation-next" onclick="changeActivationPage(1)" style="background:var(--bg-light); border:1px solid var(--border);">التالي <i class="fas fa-chevron-left"></i></button>
+                </div>
+            </div>
+            
+            <div id="platform-activation-welcome-message" style="text-align:center; padding:4rem 2rem; color:var(--text-muted);">
+                <i class="fas fa-graduation-cap" style="font-size:4rem; color:#8b5cf6; margin-bottom:1rem; opacity:0.3; display:block;"></i>
+                يرجى اختيار كورس المنصة والصف الدراسي لعرض قائمة الطلاب وتفعيل الكورس لهم.
+            </div>
+        </section>
+
         <style>
             .radar-wave {
                 position: absolute;
@@ -2421,6 +2508,27 @@
             <h3 style="margin-bottom:1rem; text-align:center;"><i class="fas fa-receipt"></i> دفع الاشتراك</h3>
             <div id="subscription-type-content">
                 <!-- Filled via JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Platform Course Selection Modal -->
+    <div id="platform-course-select-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content" style="max-width: 520px; border-radius: 24px;">
+            <button class="modal-close-btn" onclick="toggleModal('platform-course-select-modal', false)">
+                <i class="fas fa-times"></i>
+            </button>
+            <h3 style="margin-bottom:0.5rem; text-align:center;"><i class="fas fa-laptop-code"></i> اختر كورسات المنصة</h3>
+            <p style="text-align:center; color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">يمكنك اختيار كورس واحد أو أكثر</p>
+            <input id="platform-course-search" class="form-input" placeholder="بحث عن كورس..."
+                oninput="renderPlatformCourseSelectionList()">
+            <div id="platform-course-select-list" style="max-height: 320px; overflow-y:auto; display:flex; flex-direction:column; gap:0.5rem;">
+                <!-- Filled via JS -->
+            </div>
+            <div id="platform-course-confirm-section">
+                <button class="btn btn-primary" style="width:100%; height:50px; border-radius:12px; margin-top:1rem;" onclick="savePlatformCourseSelection()">
+                    <i class="fas fa-check"></i> حفظ
+                </button>
             </div>
         </div>
     </div>
@@ -3097,9 +3205,9 @@
         <script src="firebase-config.js"></script>
         <!-- Data file - must be loaded BEFORE app.js -->
         <script src="data.js?v=3" onerror="console.warn('data.js not found - fresh install mode');"></script>
-        <script src="archive_functions.js?v=3"></script>
-        <script src="app.js?v=5"></script>
-        <script src="platform-subscriptions.js?v=2"></script>
+        <script src="archive_functions.js?v=4"></script>
+        <script src="app.js?v=6"></script>
+        <script src="platform-subscriptions.js?v=3"></script>
         <script>
             if ('serviceWorker' in navigator) {
                 window.addEventListener('load', () => {
