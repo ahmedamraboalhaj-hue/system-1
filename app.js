@@ -8235,7 +8235,7 @@ function renderShifts() {
     if (eActive) eActive.innerText = activeStaffCount;
 }
 
-function handlePunchPassword() {
+async function handlePunchPassword() {
     try {
         const input = document.getElementById('shift-password-input');
         const resultDiv = document.getElementById('shift-action-result');
@@ -8244,22 +8244,81 @@ function handlePunchPassword() {
         const pin = input.value.trim();
         if (!pin) return showNotification('يرجى إدخال الرقم السري', 'warning');
 
-        if (!db.staff) db.staff = [
-            { id: 1, name: 'سكرتارية A', code: 'A', pin: 'a1234a' },
-            { id: 2, name: 'سكرتارية B', code: 'B', pin: 'b1b234' },
-            { id: 3, name: 'سكرتارية C', code: 'C', pin: 'c12c34' },
-            { id: 4, name: 'سكرتارية D', code: 'D', pin: '12d34d' }
-        ];
+        // ── أعِد تحميل بيانات الموظفين من IndexedDB لضمان أحدث بيانات ──────
+        const freshStaff = await StorageEngine.getAll('staff');
+        if (freshStaff && freshStaff.length > 0) {
+            db.staff = freshStaff;
+        }
 
-        const staff = db.staff.find(s => s.pin.trim().toLowerCase() === pin.toLowerCase());
-        if (!staff) {
+        // ── تأكد أن قائمة الموظفين محمّلة من قاعدة البيانات ──────────────
+        // لا نُعيد القيم الافتراضية إلا إذا كانت القائمة فارغة تماماً
+        if (!db.staff || db.staff.length === 0) {
+            console.warn('[Shift-Auth] db.staff فارغ — سيتم استخدام القيم الافتراضية');
+            db.staff = [
+                { id: 1, name: 'سكرتارية A', code: 'A', pin: 'a1234a' },
+                { id: 2, name: 'سكرتارية B', code: 'B', pin: 'b1b234' },
+                { id: 3, name: 'سكرتارية C', code: 'C', pin: 'c12c34' },
+                { id: 4, name: 'سكرتارية D', code: 'D', pin: '12d34d' }
+            ];
+        }
+
+        // ── تشخيص مفصّل في الـ Console ────────────────────────────────────
+        console.group('[Shift-Auth] محاولة تسجيل دخول شفت');
+        console.log('عدد الموظفين المُحمَّلين:', db.staff.length);
+        console.log('الـ PIN المُدخَل (طول):', pin.length, '| أحرف:', [...pin].map(c => c.charCodeAt(0)));
+
+        // ── بحث عن الموظف بمقارنة آمنة ───────────────────────────────────
+        // نُحوّل كلا الجانبين: trim() + toLowerCase() لإزالة مسافات وحساسية الحروف
+        const pinNormalized = pin.trim().toLowerCase();
+        let matchedStaff = null;
+        let foundByName = null;
+
+        for (const s of db.staff) {
+            const storedPin = (s.pin !== undefined && s.pin !== null) ? String(s.pin).trim().toLowerCase() : '';
+            const isMatch = (storedPin === pinNormalized);
+            console.log(`  → موظف: "${s.name}" | PIN مخزّن (طول: ${storedPin.length}) | تطابق: ${isMatch}`);
+            if (isMatch) {
+                matchedStaff = s;
+                foundByName = s.name;
+                break;
+            }
+        }
+
+        if (!matchedStaff) {
+            // ── تحقق إذا كان PIN موجوداً لكن مع فارق Case فقط ────────────
+            const caseIssue = db.staff.find(s => s.pin && String(s.pin).trim() === pin.trim() && String(s.pin).trim() !== pinNormalized);
+            if (caseIssue) {
+                console.warn('[Shift-Auth] فشل بسبب Case Sensitivity فقط — الموظف:', caseIssue.name);
+            }
+
+            // ── تحقق إذا كان PIN يحتوي على مسافات زائدة ──────────────────
+            const spaceIssue = db.staff.find(s => s.pin && String(s.pin).trim().toLowerCase() === pinNormalized && String(s.pin) !== String(s.pin).trim());
+            if (spaceIssue) {
+                console.warn('[Shift-Auth] مسافات زائدة في PIN المخزّن — الموظف:', spaceIssue.name);
+            }
+
+            // ── تحقق من وجود موظف بدون PIN ────────────────────────────────
+            const noPinStaff = db.staff.filter(s => !s.pin);
+            if (noPinStaff.length > 0) {
+                console.warn('[Shift-Auth] موظفون بدون PIN:', noPinStaff.map(s => s.name));
+            }
+
+            console.warn('[Shift-Auth] النتيجة: لم يُعثر على موظف بهذا الـ PIN');
+            console.groupEnd();
+
             resultDiv.style.display = 'block';
             resultDiv.style.color = 'var(--danger)';
-            resultDiv.innerHTML = '<i class="fas fa-times-circle"></i> الرقم السري غير صحيح!';
-            showNotification('❌ الرقم السري الذي أدخلته غير صحيح!', 'error');
-            setTimeout(() => resultDiv.style.display = 'none', 3000);
+            resultDiv.innerHTML = '<i class="fas fa-times-circle"></i> الرقم السري غير صحيح — يرجى المحاولة مرة أخرى أو التواصل مع المسؤول';
+            showNotification('❌ الرقم السري غير صحيح', 'error');
+            setTimeout(() => resultDiv.style.display = 'none', 4000);
+            input.select();
             return;
         }
+
+        console.log('[Shift-Auth] تم التعرف على الموظف:', foundByName);
+        console.groupEnd();
+
+        const staff = matchedStaff;
 
         const todayStr = new Date().toLocaleDateString('en-CA');
         if (!db.shifts) db.shifts = [];
@@ -8452,7 +8511,14 @@ function printStaffReport(staffId) {
 // --- PASSWORD MANAGEMENT CENTER ---
 let activePasswordToEdit = null;
 
-function openPasswordManagement() {
+async function openPasswordManagement() {
+    // 0. أعِد تحميل بيانات الموظفين من IndexedDB أولاً لضمان الحصول على أحدث بيانات
+    const freshStaff = await StorageEngine.getAll('staff');
+    if (freshStaff && freshStaff.length > 0) {
+        db.staff = freshStaff;
+        console.log('[PassMgmt] تم تحميل الموظفين من IndexedDB:', db.staff.length, 'موظف');
+    }
+
     // 1. Ensure settings has the passwords object
     if (!db._settings.globalPasswords) {
         db._settings.globalPasswords = {
@@ -8534,7 +8600,12 @@ function verifyOldPassword() {
     if (activePasswordToEdit.startsWith('staff_')) {
         const staffId = parseInt(activePasswordToEdit.split('_')[1]);
         const staff = db.staff.find(s => s.id === staffId);
-        correctPass = staff ? staff.pin : '';
+        if (!staff) {
+            showNotification('❌ الموظف غير موجود في قاعدة البيانات!', 'error');
+            return;
+        }
+        correctPass = staff.pin ? String(staff.pin).trim() : '';
+        console.log('[VerifyPass] التحقق من PIN الموظف:', staff.name);
     } else {
         correctPass = (db._settings.globalPasswords && db._settings.globalPasswords[activePasswordToEdit]) || '';
         if (!correctPass) {
@@ -8543,11 +8614,13 @@ function verifyOldPassword() {
         }
     }
 
-    if (input === correctPass) {
+    // مقارنة آمنة: trim من الجانبين
+    if (input.trim() === correctPass.trim()) {
         document.getElementById('password-verify-step').style.display = 'none';
         document.getElementById('password-update-step').style.display = 'block';
         document.getElementById('new-password-input').focus();
     } else {
+        console.warn('[VerifyPass] فشل التحقق — طول المُدخَل:', input.length, '| طول المخزّن:', correctPass.length);
         showNotification('❌ كلمة المرور الحالية غير صحيحة!', 'error');
     }
 }
@@ -8555,13 +8628,18 @@ function verifyOldPassword() {
 function updateToNewPassword() {
     const newVal = document.getElementById('new-password-input').value.trim();
     if (!newVal) return showNotification('يرجى إدخال كلمة مرور جديدة', 'warning');
+    if (newVal.length < 3) return showNotification('⚠️ كلمة المرور قصيرة جداً (3 أحرف على الأقل)', 'warning');
 
     if (activePasswordToEdit.startsWith('staff_')) {
         const staffId = parseInt(activePasswordToEdit.split('_')[1]);
         const staff = db.staff.find(s => s.id === staffId);
         if (staff) {
-            staff.pin = newVal;
+            staff.pin = newVal; // مُنظَّف بالفعل بـ .trim() أعلاه
             db.save('staff');
+            console.log('[UpdatePass] تم تحديث PIN الموظف:', staff.name, '| طول PIN جديد:', newVal.length);
+        } else {
+            showNotification('❌ الموظف غير موجود!', 'error');
+            return;
         }
     } else {
         if (!db._settings.globalPasswords) db._settings.globalPasswords = { main: '2446', finance: '4321', unlockPayment: '100qwe', endSubscription: '01000' };
@@ -8573,3 +8651,55 @@ function updateToNewPassword() {
     toggleModal('edit-password-modal', false);
     openPasswordManagement(); // Refresh list
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔧 أداة تشخيص مصادقة الشفتات — اكتبها في Console للتشخيص الفوري
+// diagnoseStaffAuth()
+// diagnoseStaffAuth('الـ PIN المشكوك فيه')
+// ═══════════════════════════════════════════════════════════════════════════
+async function diagnoseStaffAuth(testPin = null) {
+    console.group('🔍 تشخيص مصادقة الشفتات');
+
+    // 1. تحميل بيانات الموظفين مباشرة من IndexedDB
+    const freshStaff = await StorageEngine.getAll('staff');
+    console.log('✅ عدد الموظفين في IndexedDB:', freshStaff.length);
+
+    freshStaff.forEach((s, i) => {
+        const pinStr = s.pin !== undefined && s.pin !== null ? String(s.pin) : '⛔ undefined/null';
+        const pinTrimmed = s.pin ? String(s.pin).trim() : '';
+        const hasSpaces = pinStr !== pinTrimmed;
+        console.log(
+            `  [${i + 1}] الاسم: "${s.name}" | id: ${s.id}` +
+            ` | PIN: "${pinStr}" (طول: ${pinStr.length})` +
+            (hasSpaces ? ' ⚠️ يحتوي على مسافات زائدة!' : '')
+        );
+    });
+
+    // 2. مقارنة مع الـ PIN المُدخَل (اختياري)
+    if (testPin !== null) {
+        console.log('\n🔑 اختبار PIN:', `"${testPin}"`);
+        const normalized = String(testPin).trim().toLowerCase();
+        const match = freshStaff.find(s => s.pin && String(s.pin).trim().toLowerCase() === normalized);
+        if (match) {
+            console.log('✅ تطابق ناجح — الموظف:', match.name);
+        } else {
+            console.warn('❌ لا يوجد تطابق لهذا PIN');
+            // اقتراح أقرب تطابق
+            const partial = freshStaff.find(s => s.pin && (
+                String(s.pin).includes(testPin) || testPin.includes(String(s.pin).trim())
+            ));
+            if (partial) console.log('💡 تطابق جزئي محتمل مع:', partial.name, '| PIN:', partial.pin);
+        }
+    }
+
+    // 3. تحقق من db.staff في الذاكرة مقارنةً بـ IndexedDB
+    console.log('\n📦 db.staff في الذاكرة:', db.staff ? db.staff.length : 'غير مُحمَّل');
+    if (db.staff && db.staff.length !== freshStaff.length) {
+        console.warn('⚠️ تناقض! الذاكرة تحتوي على', db.staff.length, 'بينما IndexedDB تحتوي على', freshStaff.length);
+    }
+
+    console.groupEnd();
+    return freshStaff;
+}
+
+window.diagnoseStaffAuth = diagnoseStaffAuth;
