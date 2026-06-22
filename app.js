@@ -309,10 +309,39 @@ const db = {
         this.staff = await StorageEngine.getAll('staff');
         this.shifts = await StorageEngine.getAll('shifts');
 
-        // Refresh global gradesList variable from localStorage
+        // Refresh global gradesList variable from localStorage (مع ضمان الـ 12 الثابتة)
         const storedGrades = localStorage.getItem('edu_grades_list');
-        if (storedGrades) {
-            try { gradesList = JSON.parse(storedGrades); window.gradesList = gradesList; } catch (e) { }
+        try {
+            const parsed = storedGrades ? JSON.parse(storedGrades) : null;
+            gradesList = buildGradesList(parsed);
+            window.gradesList = gradesList;
+            localStorage.setItem('edu_grades_list', JSON.stringify(gradesList));
+        } catch (e) {
+            gradesList = buildGradesList(null);
+            window.gradesList = gradesList;
+        }
+
+        // ── ضمان المجاميع الثابتة في كل load ──────────────────────
+        // الـ 6 مجاميع (g2a-g2c, g3a-g3c) لازم موجودة دايماً
+        const bookingIds = ['g2a','g2b','g2c','g3a','g3b','g3c'];
+        const missingGroups = bookingIds.filter(bid => !this.groups.find(g => String(g.id) === bid));
+        if (missingGroups.length > 0) {
+            const DEFS = [
+                { id:'g2a', name:'مجموعة A — ثاني ثانوي', days:'السبت والثلاثاء',  time:'٤:٠٠ م — ٦:٠٠ م', grade:'2', price:350 },
+                { id:'g2b', name:'مجموعة B — ثاني ثانوي', days:'الأحد والأربعاء',  time:'٥:٠٠ م — ٧:٠٠ م', grade:'2', price:350 },
+                { id:'g2c', name:'مجموعة C — ثاني ثانوي', days:'الاثنين والخميس', time:'٦:٠٠ م — ٨:٠٠ م', grade:'2', price:350 },
+                { id:'g3a', name:'مجموعة A — ثالث ثانوي', days:'السبت والثلاثاء',  time:'٢:٠٠ م — ٤:٠٠ م', grade:'3', price:400 },
+                { id:'g3b', name:'مجموعة B — ثالث ثانوي', days:'الأحد والأربعاء',  time:'٣:٠٠ م — ٥:٠٠ م', grade:'3', price:400 },
+                { id:'g3c', name:'مجموعة C — ثالث ثانوي', days:'الاثنين والخميس', time:'٧:٠٠ م — ٩:٠٠ م', grade:'3', price:400 },
+            ];
+            const toAdd = [];
+            for (const def of DEFS) {
+                if (!this.groups.find(g => String(g.id) === def.id)) {
+                    this.groups.push({ ...def });
+                    toAdd.push({ ...def });
+                }
+            }
+            if (toAdd.length) await StorageEngine.save('groups', toAdd);
         }
 
         if (typeof renderStudents === 'function') renderStudents();
@@ -426,6 +455,16 @@ function buildRecordIdentity(table, record) {
         }
     }
 
+    // المجموعات: تطابق بالاسم + الصف + الوقت (بالإضافة للـ id)
+    if (table === 'groups') {
+        const name = pickFirstValue(record, ['name', 'title']);
+        const grade = pickFirstValue(record, ['grade', 'gradeId']);
+        const time = pickFirstValue(record, ['time', 'startTime', 'dayTime']);
+        if (name && grade) {
+            return `${table}:natural:${normalizeIdentityValue(name)}|${normalizeIdentityValue(grade)}|${normalizeIdentityValue(time)}`;
+        }
+    }
+
     if (['attendance', 'payments', 'expenses', 'scores', 'studentHandouts', 'rewards'].includes(table)) {
         const studentId = pickFirstValue(record, ['studentId', 'studentID', 'student']);
         const date = pickFirstValue(record, ['date', 'createdAt', 'day']);
@@ -458,6 +497,8 @@ async function mergeTableWithoutDuplicates(table, incomingRows) {
     const existingRows = await StorageEngine.getAll(table);
     const byIdentity = new Map();
     const byId = new Map();
+    // خريطة إعادة ربط IDs المجموعات: oldId → newId (تُستخدم فقط للمجموعات)
+    const groupIdRemap = {};
     let added = 0;
     let updated = 0;
     let skipped = 0;
@@ -478,10 +519,22 @@ async function mergeTableWithoutDuplicates(table, incomingRows) {
         const current = identity ? byIdentity.get(identity) : null;
 
         if (current) {
-            const merged = Object.assign({}, current, incoming);
-            await StorageEngine.save(table, merged);
-            if (merged.id !== undefined && merged.id !== null) byId.set(String(merged.id), merged);
-            if (identity) byIdentity.set(identity, merged);
+            // ── للمجموعات: الموجود يكسب — نحافظ على الـ id المحلي ولا نستبدله ──
+            // إذا جاء الـ incoming بـ id مختلف عن الموجود نُسجّل الـ remap
+            if (table === 'groups' && current.id !== undefined && incoming.id !== undefined &&
+                String(current.id) !== String(incoming.id)) {
+                groupIdRemap[String(incoming.id)] = String(current.id);
+                // ندمج لكن نحتفظ بالـ id المحلي
+                const merged = Object.assign({}, incoming, current); // current يكسب الـ id
+                await StorageEngine.save(table, merged);
+                byId.set(String(current.id), merged);
+                byIdentity.set(identity, merged);
+            } else {
+                const merged = Object.assign({}, current, incoming);
+                await StorageEngine.save(table, merged);
+                if (merged.id !== undefined && merged.id !== null) byId.set(String(merged.id), merged);
+                if (identity) byIdentity.set(identity, merged);
+            }
             updated++;
             continue;
         }
@@ -504,6 +557,26 @@ async function mergeTableWithoutDuplicates(table, incomingRows) {
 
         const newIdentity = buildRecordIdentity(table, incoming);
         if (newIdentity) byIdentity.set(newIdentity, incoming);
+    }
+
+    // ── بعد دمج المجموعات: أعد ربط الطلاب إن تغيّرت أي IDs ──────
+    if (table === 'groups' && Object.keys(groupIdRemap).length > 0) {
+        const allStudents = await StorageEngine.getAll('students');
+        const studentsToFix = [];
+        allStudents.forEach(s => {
+            const remapped = groupIdRemap[String(s.groupId)];
+            if (remapped) {
+                s.groupId = remapped;
+                studentsToFix.push(s);
+                // تحديث الذاكرة أيضاً
+                const memIdx = (db.students || []).findIndex(ms => ms.id === s.id);
+                if (memIdx !== -1) db.students[memIdx].groupId = remapped;
+            }
+        });
+        if (studentsToFix.length > 0) {
+            await StorageEngine.save('students', studentsToFix);
+            console.log(`[mergeGroups] أُعيد ربط ${studentsToFix.length} طالب بمجموعاتهم الصحيحة بعد الدمج`);
+        }
     }
 
     return { added, updated, skipped };
@@ -638,27 +711,38 @@ async function hydrateDatabase(dataBlob) {
     }
     const grades = processedData.gradesList || processedData.edu_grades_list || processedData.grades;
     if (grades) {
-        // ✅ MERGE grades instead of replacing - keeps Preparatory grades when importing Secondary-only old backups
+        // ✅ MERGE grades: الـ 12 الثابتة دايماً + أي مراحل مخصصة من الملف أو الحالية
         let incomingGrades = (typeof grades === 'string') ? JSON.parse(grades) : grades;
         if (!Array.isArray(incomingGrades)) incomingGrades = [];
         const existingGradesRaw = localStorage.getItem('edu_grades_list');
         let existingGrades = [];
         try { existingGrades = existingGradesRaw ? JSON.parse(existingGradesRaw) : []; } catch (e) { existingGrades = []; }
-        // Add any grade from the imported file that's NOT already in the current list
+        // دمج: الموجود + الوارد من الملف (بدون تكرار بالـ id)
+        const combined = [...existingGrades];
         incomingGrades.forEach(g => {
-            if (!existingGrades.find(eg => String(eg.id) === String(g.id))) {
-                existingGrades.push(g);
+            if (!combined.find(eg => String(eg.id) === String(g.id))) {
+                combined.push(g);
             }
         });
-        localStorage.setItem('edu_grades_list', JSON.stringify(existingGrades));
+        // تأكد من وجود الـ 12 الثابتة دايماً
+        const finalGrades = buildGradesList(combined);
+        localStorage.setItem('edu_grades_list', JSON.stringify(finalGrades));
     }
 
     const localSnapshot = processedData.localStorageSnapshot || processedData.localStorage || processedData.browserStorage;
     if (localSnapshot && typeof localSnapshot === 'object' && !Array.isArray(localSnapshot)) {
+        // احفظ الـ grades المُدمجة قبل ما نطبق الـ snapshot
+        const mergedGradesBeforeSnapshot = localStorage.getItem('edu_grades_list');
         Object.keys(localSnapshot).forEach(key => {
             const value = localSnapshot[key];
+            // تجاهل edu_grades_list من الـ snapshot - تم دمجها بالفعل في الخطوة السابقة
+            if (key === 'edu_grades_list') return;
             if (value !== undefined && value !== null) localStorage.setItem(key, String(value));
         });
+        // استعد الـ grades المُدمجة لو اتمسحت
+        if (mergedGradesBeforeSnapshot) {
+            localStorage.setItem('edu_grades_list', mergedGradesBeforeSnapshot);
+        }
     }
     if (processedData.activeGrade) localStorage.setItem('edu_active_grade', processedData.activeGrade);
     if (processedData.activeGroup) localStorage.setItem('edu_active_group', processedData.activeGroup);
@@ -735,22 +819,51 @@ async function importFromFolder() {
 // Initialize from external file if localStorage is empty
 const initialData = window.edu_initial_data || {};
 
-let gradesList = JSON.parse(localStorage.getItem('edu_grades_list')) || initialData.gradesList || [
-    { id: 101, name: 'الأول الابتدائي', icon: 'fa-child' },
-    { id: 102, name: 'الثاني الابتدائي', icon: 'fa-child' },
-    { id: 103, name: 'الثالث الابتدائي', icon: 'fa-child' },
-    { id: 104, name: 'الرابع الابتدائي', icon: 'fa-book-open' },
-    { id: 105, name: 'الخامس الابتدائي', icon: 'fa-book-open' },
-    { id: 106, name: 'السادس الابتدائي', icon: 'fa-book-open' },
-    { id: 201, name: 'الأول الإعدادي', icon: 'fa-user-graduate' },
-    { id: 202, name: 'الثاني الإعدادي', icon: 'fa-user-graduate' },
-    { id: 203, name: 'الثالث الإعدادي', icon: 'fa-user-graduate' },
-    { id: 301, name: 'الأول الثانوي', icon: 'fa-university' },
-    { id: 302, name: 'الثاني الثانوي', icon: 'fa-flask' },
-    { id: 303, name: 'الثالث الثانوي', icon: 'fa-graduation-cap' }
+// ─── الـ 12 مرحلة الثابتة - لا تُحذف ولا تتغير IDs بتاعتها ───
+const DEFAULT_GRADES = [
+    { id: 101, name: 'الأول الابتدائي',   icon: 'fa-child' },
+    { id: 102, name: 'الثاني الابتدائي',  icon: 'fa-child' },
+    { id: 103, name: 'الثالث الابتدائي',  icon: 'fa-child' },
+    { id: 104, name: 'الرابع الابتدائي',  icon: 'fa-book-open' },
+    { id: 105, name: 'الخامس الابتدائي',  icon: 'fa-book-open' },
+    { id: 106, name: 'السادس الابتدائي',  icon: 'fa-book-open' },
+    { id: 201, name: 'الأول الإعدادي',    icon: 'fa-user-graduate' },
+    { id: 202, name: 'الثاني الإعدادي',   icon: 'fa-user-graduate' },
+    { id: 203, name: 'الثالث الإعدادي',   icon: 'fa-user-graduate' },
+    { id: 301, name: 'الأول الثانوي',     icon: 'fa-university' },
+    { id: 302, name: 'الثاني الثانوي',    icon: 'fa-flask' },
+    { id: 303, name: 'الثالث الثانوي',    icon: 'fa-graduation-cap' },
 ];
+
+/**
+ * يدمج القائمة المحفوظة مع الـ 12 الثابتة:
+ * - الـ 12 دايماً موجودة (بترتيبها)
+ * - أي مرحلة مضافة يدوياً (id > 303) تُضاف بعدهم
+ */
+function buildGradesList(stored) {
+    const result = DEFAULT_GRADES.map(def => {
+        const saved = stored ? stored.find(s => String(s.id) === String(def.id)) : null;
+        return saved ? Object.assign({}, def, saved) : { ...def };
+    });
+    // أضف المراحل المخصصة (اللي ليها id مش من الـ 12)
+    if (Array.isArray(stored)) {
+        stored.forEach(s => {
+            const isDefault = DEFAULT_GRADES.some(d => String(d.id) === String(s.id));
+            if (!isDefault) result.push(s);
+        });
+    }
+    return result;
+}
+
+let _storedGrades = null;
+try { _storedGrades = JSON.parse(localStorage.getItem('edu_grades_list')); } catch(e) {}
+let gradesList = buildGradesList(_storedGrades || (initialData && initialData.gradesList));
+// احفظ الـ 12 مرة واحدة لو مش موجودين أصلاً
+localStorage.setItem('edu_grades_list', JSON.stringify(gradesList));
+
 // تصدير gradesList لتكون متاحة في ملفات JS الأخرى
 window.gradesList = gradesList;
+window.DEFAULT_GRADES = DEFAULT_GRADES;
 
 let appZoom = parseFloat(localStorage.getItem('app_zoom')) || 1.0;
 
@@ -783,6 +896,9 @@ if (!localStorage.getItem('edu_grades_list') && window.edu_initial_data) {
 }
 
 function saveGradesList() {
+    // تأكد إن الـ 12 المرحلة الثابتة دايماً موجودة قبل الحفظ
+    gradesList = buildGradesList(gradesList);
+    window.gradesList = gradesList;
     localStorage.setItem('edu_grades_list', JSON.stringify(gradesList));
 }
 
@@ -936,6 +1052,10 @@ function addNewGrade() {
 }
 
 async function deleteGrade(id) {
+    // الـ 12 مرحلة الثابتة محمية من الحذف
+    if (DEFAULT_GRADES.some(d => String(d.id) === String(id))) {
+        return showNotification('لا يمكن حذف المراحل الدراسية الأساسية', 'error');
+    }
     if (!confirm('هل أنت متأكد من حذف هذه السنة الدراسية؟ سيتم مسح كافة بياناتها نهائياً!')) return;
     gradesList = gradesList.filter(g => g.id != id);
     window.gradesList = gradesList;
@@ -1352,9 +1472,11 @@ async function handleStudentSubmit() {
 
         if (!StorageEngine.db) await StorageEngine.init();
 
-        const baseTime = Date.now().toString().slice(-8);
-        const randNum = Math.floor(Math.random() * 900 + 100).toString();
-        const uniqueCode = '1' + baseTime + randNum;
+        // ── توليد الكود عبر المولّد المركزي (code-generator.js) ──
+        // الكود: 12 رقمًا إنجليزيًا فقط، بلا حروف أو رموز أو شرطات
+        const uniqueCode = (typeof generateLocalUniqueCode === 'function')
+          ? generateLocalUniqueCode(db.students)
+          : ('1' + Date.now().toString().slice(-8) + Math.floor(Math.random() * 900 + 100));
 
         const student = {
             id: Date.now(), name, phone, grade: targetGrade, groupId, parentPhone: parent,
@@ -1518,7 +1640,7 @@ function handleAddGroup() {
         renderGroupSelection(currentGrade);
     }
     if (document.getElementById('portal-overlay').style.display !== 'none') {
-        renderPortalGroups(currentGrade);
+        renderPortalGroups(currentGrade); // async — intentionally not awaited here
     }
 
     refreshGroupContexts(); // Update all dropdowns
@@ -2253,7 +2375,7 @@ function showPortalStep(step, data) {
         groupStep.style.display = 'block';
         if (data) {
             currentGrade = String(data);
-            renderPortalGroups(data);
+            renderPortalGroups(data); // async — shows spinner then groups
         }
     }
 }
@@ -2285,14 +2407,28 @@ function renderPortalGrades() {
     container.innerHTML = html;
 }
 
-function renderPortalGroups(gradeId) {
+async function renderPortalGroups(gradeId) {
     const container = document.getElementById('portal-groups-list');
     if (!container) return;
 
     const gradeObj = gradesList.find(g => String(g.id) === String(gradeId));
     document.getElementById('portal-grade-title-active').innerText = gradeObj ? gradeObj.name : 'السنة الدراسية';
 
-    const gradeGroups = db.groups.filter(g => String(g.grade) === String(gradeId));
+    // ── ضمان وجود مجاميع الحجز الثابتة قبل الرسم ──────────────
+    const isBookingGrade = String(gradeId) === '2' || String(gradeId) === '3';
+    let gradeGroups = db.groups.filter(g => String(g.grade) === String(gradeId));
+
+    if (isBookingGrade && gradeGroups.length === 0) {
+        // أظهر loading مؤقت ريثما تُزرع المجاميع
+        container.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+                        height:260px;width:100%;gap:16px;color:var(--text2,#888);">
+                <i class="fas fa-spinner fa-spin" style="font-size:2rem;color:var(--primary,#c8a96e);"></i>
+                <span style="font-size:1rem;font-weight:700;">جاري تحميل المجاميع...</span>
+            </div>`;
+        try { await seedBookingGroups(); } catch(e) { console.warn('[renderPortalGroups] seedBookingGroups:', e); }
+        gradeGroups = db.groups.filter(g => String(g.grade) === String(gradeId));
+    }
 
     // Groups first
     let html = gradeGroups.map((group, idx) => `
@@ -7469,6 +7605,16 @@ window.onload = async () => {
         return;
     }
 
+    // ── ضمان المجاميع الثابتة للحجز عند كل تشغيل ──────────────
+    // يضمن أن g2a..g2c و g3a..g3c موجودة دائماً بـ IDs الصحيحة
+    // ويُصلح أي ربط خاطئ للطلاب من مزامنات سابقة
+    try {
+        await seedBookingGroups();
+        await repairGroupBindings();
+    } catch (e) {
+        console.warn('[startup] seedBookingGroups/repairGroupBindings:', e);
+    }
+
     applyZoom(); // Apply the saved zoom level
     initGradeSelects(); // Initialize all grade selects
     if (typeof initFilters === 'function') initFilters(); // Initialize other filters
@@ -8703,3 +8849,462 @@ async function diagnoseStaffAuth(testPin = null) {
 }
 
 window.diagnoseStaffAuth = diagnoseStaffAuth;
+
+// ══════════════════════════════════════════════════════════════════
+//  BOOKING INTEGRATION v2 — استيراد طلاب الحجز من المنصة
+//  ✅ تحديث فوري لكل الشاشات بدون إعادة تشغيل
+//  ✅ أكواد أرقام فقط 8 خانات فريدة 100%
+// ══════════════════════════════════════════════════════════════════
+
+// ─── المجموعات الثابتة (مطابقة لـ booking.html) ─────────────────
+// ══════════════════════════════════════════════════════════════
+//  تعريف المجاميع الثابتة للحجز — مطابق 100% لـ booking.html
+//  IDs ثابتة: g2a g2b g2c (ثاني ثانوي) | g3a g3b g3c (ثالث ثانوي)
+//  هذه المجاميع يجب أن تكون موجودة دائماً في السيستم بنفس الـ IDs
+// ══════════════════════════════════════════════════════════════
+const BOOKING_GROUPS_DEF = [
+  // ── ثاني ثانوي ─────────────────────────────────────────────
+  { id:'g2a', name:'مجموعة A — ثاني ثانوي', days:'السبت والثلاثاء',  time:'٤:٠٠ م — ٦:٠٠ م', grade:'2', price:350 },
+  { id:'g2b', name:'مجموعة B — ثاني ثانوي', days:'الأحد والأربعاء',  time:'٥:٠٠ م — ٧:٠٠ م', grade:'2', price:350 },
+  { id:'g2c', name:'مجموعة C — ثاني ثانوي', days:'الاثنين والخميس', time:'٦:٠٠ م — ٨:٠٠ م', grade:'2', price:350 },
+  // ── ثالث ثانوي ─────────────────────────────────────────────
+  { id:'g3a', name:'مجموعة A — ثالث ثانوي', days:'السبت والثلاثاء',  time:'٢:٠٠ م — ٤:٠٠ م', grade:'3', price:400 },
+  { id:'g3b', name:'مجموعة B — ثالث ثانوي', days:'الأحد والأربعاء',  time:'٣:٠٠ م — ٥:٠٠ م', grade:'3', price:400 },
+  { id:'g3c', name:'مجموعة C — ثالث ثانوي', days:'الاثنين والخميس', time:'٧:٠٠ م — ٩:٠٠ م', grade:'3', price:400 },
+];
+
+// ── أسماء بديلة قديمة للمجاميع (لاستيعاب بيانات قبل التوحيد) ──
+// booking.html كان بيحفظ name بدون " — ثاني ثانوي" في بعض النسخ
+const BOOKING_GROUPS_ALT_NAMES = {
+  'g2a': ['مجموعة A', 'Group A', 'group a', 'مجموعة a'],
+  'g2b': ['مجموعة B', 'Group B', 'group b', 'مجموعة b'],
+  'g2c': ['مجموعة C', 'Group C', 'group c', 'مجموعة c'],
+  'g3a': ['مجموعة A', 'Group A', 'group a', 'مجموعة a'],
+  'g3b': ['مجموعة B', 'Group B', 'group b', 'مجموعة b'],
+  'g3c': ['مجموعة C', 'Group C', 'group c', 'مجموعة c'],
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  seedBookingGroups
+//  يضمن أن المجاميع الستة موجودة بـ IDs الثابتة دائماً.
+//  يُعالج ثلاث حالات:
+//    1. المجموعة موجودة بنفس الـ id → تحديث بياناتها فقط
+//    2. موجودة بـ id مختلف (رقمي قديم / اسم مختلف قليلاً)
+//       → توحيد الـ id + إعادة ربط كل طلابها
+//    3. غير موجودة أصلاً → إضافتها
+// ═══════════════════════════════════════════════════════════════
+async function seedBookingGroups() {
+  if (!StorageEngine.db) await StorageEngine.init();
+
+  // أعد تحميل المجاميع من IndexedDB للتأكد من أحدث نسخة
+  db.groups = await StorageEngine.getAll('groups');
+
+  const groupIdRemap  = {}; // oldId → canonical id
+  const groupsToSave  = []; // المجاميع التي تحتاج حفظ
+  let   anyChange     = false;
+
+  for (const def of BOOKING_GROUPS_DEF) {
+
+    // ── 1. تطابق تام بالـ id ──────────────────────────────────
+    const exactIdx = db.groups.findIndex(g => String(g.id) === String(def.id));
+    if (exactIdx !== -1) {
+      // حدّث البيانات لو اختلفت (اسم / وقت / سعر) بدون المساس بالـ id
+      const existing = db.groups[exactIdx];
+      const needsUpdate =
+        existing.name  !== def.name  ||
+        existing.days  !== def.days  ||
+        existing.time  !== def.time  ||
+        existing.grade !== def.grade ||
+        existing.price !== def.price;
+      if (needsUpdate) {
+        db.groups[exactIdx] = { ...existing, ...def };
+        groupsToSave.push(db.groups[exactIdx]);
+        anyChange = true;
+      }
+      groupIdRemap[def.id] = def.id;
+      continue;
+    }
+
+    // ── 2. بحث بالاسم الكامل + الصف ─────────────────────────
+    let dupeIdx = db.groups.findIndex(g =>
+      String(g.grade) === String(def.grade) &&
+      String(g.name)  === String(def.name)
+    );
+
+    // ── 2b. بحث بالأسماء البديلة + الصف ─────────────────────
+    if (dupeIdx === -1) {
+      const altNames = BOOKING_GROUPS_ALT_NAMES[def.id] || [];
+      dupeIdx = db.groups.findIndex(g =>
+        String(g.grade) === String(def.grade) &&
+        altNames.some(alt => String(g.name).includes(alt))
+      );
+    }
+
+    // ── 2c. بحث بالوقت + الصف (fallback قوي) ────────────────
+    if (dupeIdx === -1) {
+      dupeIdx = db.groups.findIndex(g =>
+        String(g.grade) === String(def.grade) &&
+        String(g.time)  === String(def.time)
+      );
+    }
+
+    if (dupeIdx !== -1) {
+      const oldId = String(db.groups[dupeIdx].id);
+      // سجّل الـ remap قبل التغيير
+      groupIdRemap[oldId] = def.id;
+      // استبدل بالكائن الكامل الصحيح مع الـ id الثابت
+      db.groups[dupeIdx] = { ...db.groups[dupeIdx], ...def, id: def.id };
+      groupsToSave.push(db.groups[dupeIdx]);
+      // احذف السجل القديم من IndexedDB (ID مختلف = سجل مختلف)
+      if (oldId !== def.id) await StorageEngine.delete('groups', oldId);
+      anyChange = true;
+      continue;
+    }
+
+    // ── 3. مجموعة جديدة كلياً → أضفها ──────────────────────
+    const newGroup = { ...def };
+    db.groups.push(newGroup);
+    groupsToSave.push(newGroup);
+    groupIdRemap[def.id] = def.id;
+    anyChange = true;
+  }
+
+  // ── حفظ المجاميع المُعدَّلة/الجديدة ─────────────────────────
+  if (groupsToSave.length > 0) {
+    await StorageEngine.save('groups', groupsToSave);
+  }
+
+  // ── إعادة ربط الطلاب بعد توحيد IDs ─────────────────────────
+  if (Object.keys(groupIdRemap).some(k => groupIdRemap[k] !== k)) {
+    // أعد تحميل الطلاب للتأكد
+    db.students = await StorageEngine.getAll('students');
+    const studentsToFix = [];
+    for (const s of db.students) {
+      const remapped = groupIdRemap[String(s.groupId)];
+      if (remapped && remapped !== String(s.groupId)) {
+        s.groupId = remapped;
+        studentsToFix.push(s);
+      }
+    }
+    if (studentsToFix.length > 0) {
+      await StorageEngine.save('students', studentsToFix);
+      console.log(`[seedBookingGroups] ✅ أُعيد ربط ${studentsToFix.length} طالب بمجموعاتهم الصحيحة`);
+    }
+  }
+
+  if (anyChange) {
+    if (typeof renderGroups === 'function') renderGroups();
+    if (typeof refreshGroupContexts === 'function') refreshGroupContexts();
+    console.log('[seedBookingGroups] ✅ تم توحيد المجاميع الثابتة');
+  } else {
+    console.log('[seedBookingGroups] ✅ المجاميع الثابتة موجودة وسليمة');
+  }
+}
+
+// ─── تحديث شامل بعد استيراد طلاب الحجز (بدون اختطاف السياق الحالي) ─
+function _refreshAllStudentViews(addedStudents) {
+  // ١. إعادة ضبط صفحة قائمة الطلاب
+  if (typeof studentListPage !== 'undefined') studentListPage = 0;
+
+  // ٢. تحديث الـ header بدون تغيير currentGrade أو currentGroupId
+  //    ⚠️ لا نُغيّر الصف/المجموعة الحالية — المستخدم قد يكون داخل صف آخر
+  //    والمزامنة الصامتة يجب ألا تختطف السياق وتُخفي المجموعات الحالية.
+  if (typeof syncUIWithContext === 'function') syncUIWithContext();
+
+  // ٣. تحديث قائمة الطلاب (تعكس الصف/المجموعة الحالية)
+  if (typeof renderStudents === 'function') renderStudents();
+
+  // ٤. تحديث قائمة المجموعات (لتظهر العداد الجديد للطلاب)
+  if (typeof renderGroups === 'function') renderGroups();
+
+  // ٥. لو كنا داخل شاشة تفاصيل مجموعة → نحدّثها فوراً
+  if (typeof renderGroupStudents === 'function') renderGroupStudents();
+  if (typeof updateGroupDetailStats === 'function' && currentGroupId) {
+    updateGroupDetailStats(currentGroupId);
+  }
+
+  // ٦. تحديث الـ dropdowns
+  if (typeof initFilters === 'function') initFilters();
+  if (typeof refreshGroupContexts === 'function') refreshGroupContexts();
+
+  // ٧. لا نُجبر الانتقال لشاشة الطلاب — المزامنة الصامتة لا تُشتّت المستخدم
+}
+
+// ─── State المزامنة ───────────────────────────────────────────────
+let _bookingSyncRunning = false;
+let _lastBookingSync    = null;
+
+// ─── الدالة الرئيسية: استلام وعرض طلاب الحجز فوراً ─────────────
+async function importBookingStudents(silent = false) {
+  if (_bookingSyncRunning) return;
+  _bookingSyncRunning = true;
+
+  const btn = document.getElementById('btn-import-bookings');
+
+  try {
+    if (!silent && btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري الاستلام...';
+    }
+
+    const firebaseReady = await ensureFirebaseInitialized();
+    if (!firebaseReady) {
+      if (!silent) showNotification('Firebase غير متاح — تأكد من الاتصال بالإنترنت', 'error');
+      return;
+    }
+
+    const snap = await window.db
+      .collection('bookingRequests')
+      .where('status', '==', 'approved')
+      .get();
+
+    if (snap.empty) {
+      if (!silent) showNotification('لا توجد طلبات حجز معتمدة جديدة', 'info');
+      _lastBookingSync = new Date();
+      _updateBookingSyncUI(0);
+      return;
+    }
+
+    if (!StorageEngine.db) await StorageEngine.init();
+    await seedBookingGroups();
+
+    // الطلاب الموجودين مسبقاً (بالـ qrCode) لتجنّب التكرار
+    const existingCodes = new Set(db.students.map(s => String(s.qrCode)));
+
+    const toAdd = [];
+    snap.forEach(doc => {
+      const d = doc.data();
+      if (!d.centerCode) return;
+      if (existingCodes.has(String(d.centerCode))) return;
+
+      const systemGrade = (typeof normalizeGrade === 'function')
+        ? normalizeGrade(d.groupGrade || d.grade || '2')
+        : (d.groupGrade || d.grade || '2');
+
+      // ── ربط المجموعة المحلية الصحيحة ──────────────────────────────
+      // d.groupId هو ID المجموعة في Firebase وقد لا يتطابق مع IDs المحلية.
+      // نبحث أولاً في db.groups بالـ ID المباشر، وإن لم نجد نبحث بالاسم+الصف.
+      let resolvedGroupId = '';
+      const localGroupById = db.groups.find(g => String(g.id) === String(d.groupId || ''));
+      if (localGroupById) {
+        resolvedGroupId = String(localGroupById.id);
+      } else {
+        // البحث بالاسم أو الصف كـ fallback
+        const localGroupByName = db.groups.find(g =>
+          String(g.grade) === String(systemGrade) &&
+          (d.groupName ? String(g.name) === String(d.groupName) : true)
+        );
+        if (localGroupByName) {
+          resolvedGroupId = String(localGroupByName.id);
+        } else if (d.groupId) {
+          // لا توجد مجموعة محلية مطابقة — نحفظ الـ groupId الخارجي مؤقتاً
+          resolvedGroupId = String(d.groupId);
+        }
+      }
+
+      // كل id لازم يكون فريد — نضيف index عشان لو وصلوا في نفس الميلي ثانية
+      const studentId = Date.now() + toAdd.length + Math.floor(Math.random() * 9999);
+
+      toAdd.push({
+        id:           studentId,
+        name:         d.fullName     || d.name      || 'طالب',
+        phone:        d.studentPhone || d.phone     || '',
+        parentPhone:  d.parentPhone  || '',
+        address:      d.address      || '',
+        grade:        systemGrade,
+        groupId:      resolvedGroupId,
+        qrCode:       d.centerCode,
+        offlineCode:  d.centerCode,
+        balance:      0,
+        points:       0,
+        joinDate:     d.activatedAt  || d.verifiedAt || new Date().toISOString(),
+        source:       'booking_import',
+        bookingDocId: doc.id,
+        firebaseGroupId: d.groupId || '',  // نحتفظ بالـ ID الأصلي للمرجعية
+      });
+      existingCodes.add(String(d.centerCode));
+    });
+
+    if (toAdd.length === 0) {
+      if (!silent) showNotification('جميع الطلاب المعتمدين موجودون بالفعل ✅', 'success');
+      _lastBookingSync = new Date();
+      _updateBookingSyncUI(0);
+      return;
+    }
+
+    // حفظ في الذاكرة أولاً ثم IndexedDB
+    for (const s of toAdd) db.students.push(s);
+    await StorageEngine.save('students', toAdd);
+
+    _lastBookingSync = new Date();
+    _updateBookingSyncUI(toAdd.length);
+
+    // ✅ تحديث فوري شامل لكل الشاشات
+    _refreshAllStudentViews(toAdd);
+
+    showNotification(
+      `✅ تم استلام ${toAdd.length} طالب جديد وإضافتهم للمجموعات فوراً`,
+      'success'
+    );
+
+  } catch (err) {
+    console.error('[BookingSync]', err);
+    if (!silent) showNotification('خطأ أثناء الاستلام: ' + err.message, 'error');
+  } finally {
+    _bookingSyncRunning = false;
+    if (!silent && btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-download"></i> مزامنة الآن';
+    }
+  }
+}
+
+// ─── تحديث UI بانر المزامنة ──────────────────────────────────────
+function _updateBookingSyncUI(newCount) {
+  const badge    = document.getElementById('booking-sync-badge');
+  const lastSync = document.getElementById('booking-sync-last');
+  if (badge) {
+    if (newCount > 0) {
+      badge.textContent = '+' + newCount + ' جديد';
+      badge.style.display = 'inline-block';
+      setTimeout(() => { if (badge) badge.style.display = 'none'; }, 10000);
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+  if (lastSync && _lastBookingSync) {
+    lastSync.textContent = '⏱ آخر مزامنة: ' + _lastBookingSync.toLocaleTimeString('ar-EG');
+    lastSync.style.display = 'inline';
+  }
+}
+
+// ─── مزامنة تلقائية في الخلفية كل 5 دقائق ───────────────────────
+function startBookingAutoSync() {
+  setTimeout(() => importBookingStudents(true), 12000);
+  setInterval(() => importBookingStudents(true), 5 * 60 * 1000);
+}
+
+// ─── ربط startBookingAutoSync بعد نجاح كلمة المرور ──────────────
+const _origCheckPass = checkAppPassword;
+window.checkAppPassword = function checkAppPassword(val) {
+  _origCheckPass(val);
+  const correct = (db._settings.globalPasswords && db._settings.globalPasswords.main) || '2446';
+  if (val === correct) {
+    setTimeout(startBookingAutoSync, 3000);
+  }
+};
+
+window.importBookingStudents = importBookingStudents;
+window.seedBookingGroups     = seedBookingGroups;
+window.startBookingAutoSync  = startBookingAutoSync;
+
+// ============================================================
+//  repairGroupBindings  —  إصلاح ربط الطلاب بالمجموعات
+//  يُصلح البيانات القديمة المتأثرة بمشكلة المزامنة:
+//    1. طلاب لديهم groupId لا يتطابق مع أي مجموعة محلية
+//    2. طلاب من الحجز (source: booking_import) لم يُربطوا
+//  يُستدعى يدوياً من الكونسول أو بعد المزامنة
+// ============================================================
+async function repairGroupBindings() {
+  if (!StorageEngine.db) await StorageEngine.init();
+
+  // إعادة تحميل أحدث نسخة من الذاكرة
+  db.groups   = await StorageEngine.getAll('groups');
+  db.students = await StorageEngine.getAll('students');
+
+  const validGroupIds = new Set(db.groups.map(g => String(g.id)));
+  const studentsToFix = [];
+  let fixedCount = 0;
+  let orphanCount = 0;
+
+  for (const student of db.students) {
+    const gid = String(student.groupId || '');
+
+    // ── حالة 1: الـ groupId موجود وصحيح ─────────────────────
+    if (gid && validGroupIds.has(gid)) continue;
+
+    // ── حالة 2: طالب بدون groupId أو بـ groupId غير موجود ──
+    const firebaseGid = String(student.firebaseGroupId || '');
+    let matched = null;
+
+    // أولاً: firebaseGroupId = g2a/g2b/.../g3c مباشرةً (الأكثر دقة)
+    if (firebaseGid && validGroupIds.has(firebaseGid)) {
+      matched = db.groups.find(g => String(g.id) === firebaseGid);
+    }
+
+    // ثانياً: firebaseGroupId موجود لكن مش في validGroupIds
+    // (يعني ممكن يكون الـ groupId القديم قبل التوحيد)
+    if (!matched && firebaseGid) {
+      matched = db.groups.find(g => String(g.id) === firebaseGid);
+    }
+
+    // ثالثاً: طالب حجز — ابحث بالـ groupId الأصلي في BOOKING_GROUPS_DEF
+    // (الـ groupId اللي جاء من Firebase هو نفسه g2a/g2b/...)
+    if (!matched && student.source === 'booking_import') {
+      const origGid = String(student.groupId || firebaseGid || '');
+      const defMatch = (typeof BOOKING_GROUPS_DEF !== 'undefined')
+        ? BOOKING_GROUPS_DEF.find(d => d.id === origGid)
+        : null;
+      if (defMatch) {
+        matched = db.groups.find(g => String(g.id) === defMatch.id) ||
+                  db.groups.find(g => String(g.grade) === defMatch.grade && String(g.time) === defMatch.time);
+      }
+      // لو ما لقيناش بالـ ID جرب بالصف — لكن اختار بالوقت للدقة
+      if (!matched) {
+        const gradeGroups = db.groups.filter(g => String(g.grade) === String(student.grade));
+        matched = gradeGroups[0] || null; // أفضل من لا شيء
+      }
+    }
+
+    // رابعاً: تطابق بالصف فقط (للطلاب المضافين يدوياً بدون مجموعة)
+    if (!matched) {
+      matched = db.groups.find(g => String(g.grade) === String(student.grade));
+    }
+
+    if (matched) {
+      student.groupId = String(matched.id);
+      studentsToFix.push(student);
+      fixedCount++;
+    } else {
+      orphanCount++;
+      console.warn(`[repairGroupBindings] طالب يتيم (لا توجد مجموعة لصفه): ${student.name} — صف: ${student.grade}`);
+    }
+  }
+
+  if (studentsToFix.length > 0) {
+    // تحديث IndexedDB
+    await StorageEngine.save('students', studentsToFix);
+    // تحديث الذاكرة
+    studentsToFix.forEach(fixed => {
+      const idx = db.students.findIndex(s => s.id === fixed.id);
+      if (idx !== -1) db.students[idx] = fixed;
+    });
+    // تحديث الواجهة
+    if (typeof renderStudents === 'function') renderStudents();
+    if (typeof renderGroups === 'function') renderGroups();
+    if (typeof renderGroupStudents === 'function') renderGroupStudents();
+    if (typeof syncUIWithContext === 'function') syncUIWithContext();
+  }
+
+  const msg = fixedCount > 0
+    ? `✅ تم إصلاح ربط ${fixedCount} طالب بمجموعاتهم الصحيحة` +
+      (orphanCount > 0 ? ` | ⚠️ ${orphanCount} طالب لا توجد مجموعة لصفهم` : '')
+    : orphanCount > 0
+      ? `⚠️ ${orphanCount} طالب لا توجد مجموعة لصفهم — تحقق من إنشاء المجموعات أولاً`
+      : '✅ جميع الطلاب مرتبطون بمجموعاتهم بشكل صحيح';
+
+  console.log('[repairGroupBindings]', { fixedCount, orphanCount });
+  if (typeof showNotification === 'function') showNotification(msg, fixedCount > 0 ? 'success' : 'info');
+
+  return { fixedCount, orphanCount };
+}
+
+// ── تشغيل الإصلاح تلقائياً بعد كل مزامنة ──────────────────────
+const _origImportBooking = importBookingStudents;
+window.importBookingStudents = async function(silent = false) {
+  await _origImportBooking(silent);
+  // بعد ثانية من اكتمال الاستيراد نُشغّل الإصلاح التلقائي
+  setTimeout(() => repairGroupBindings(), 1500);
+};
+
+window.repairGroupBindings = repairGroupBindings;
